@@ -11,7 +11,9 @@ import {
   PauseCircle,
   PlayCircle,
   RefreshCw,
+  Search as SearchIcon,
   Send,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -49,6 +51,8 @@ const ROW_HEIGHT_PX = 76;
 export default function InboxView({ workspace, accounts, openEmailId, onEmailOpened }) {
   const [emails, setEmails] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
@@ -74,8 +78,24 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
   }, [workspace]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    const q = searchQuery.trim();
+    if (!workspace) return;
+    if (!q) {
+      refresh();
+      return;
+    }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const rows = await InboxApi.Search(workspace.id, q, 100);
+        setEmails(rows);
+        setReachedEnd(true);
+      } finally {
+        setSearching(false);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [searchQuery, workspace, refresh]);
 
   useEffect(() => {
     if (selectedId == null) {
@@ -160,6 +180,31 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
             </Button>
           </div>
         </div>
+        <div className="px-3 py-2 border-b border-hairline">
+          <div className="relative">
+            {searching ? (
+              <LoaderCircle className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary animate-spin" />
+            ) : (
+              <SearchIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary" />
+            )}
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search this workspace…"
+              className="pl-7 pr-7 h-8 text-[13px]"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-tertiary hover:text-ink"
+                aria-label="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
         <EmailList
           emails={emails}
           selectedId={selectedId}
@@ -175,39 +220,47 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
             }
           }}
           footer={
-            <div className="px-3 pb-4 pt-1 flex flex-col gap-2 items-stretch">
-              {!reachedEnd && (
-                <Button size="sm" variant="secondary" onClick={loadOlder} disabled={loadingOlder}>
-                  {loadingOlder ? (
-                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  )}
-                  {loadingOlder ? "Loading…" : "Load older messages"}
-                </Button>
-              )}
-              {accounts.some((a) => a.authKind === "gmail_oauth" || a.authKind === "imap") && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={backfillFromServer}
-                  disabled={backfilling}
-                  title="Pull the next 200 messages older than the oldest one shown"
-                >
-                  {backfilling ? (
-                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  )}
-                  {backfilling ? "Fetching older…" : "Fetch 200 older from server"}
-                </Button>
-              )}
-              {reachedEnd && (
-                <p className="text-[11px] text-ink-tertiary text-center">
-                  You've reached the oldest cached message.
-                </p>
-              )}
-            </div>
+            searchQuery.trim() ? (
+              <div className="px-3 pb-4 pt-1 text-[11px] text-ink-tertiary text-center">
+                {emails.length === 0
+                  ? "No matches."
+                  : `Search results for "${searchQuery.trim()}".`}
+              </div>
+            ) : (
+              <div className="px-3 pb-4 pt-1 flex flex-col gap-2 items-stretch">
+                {!reachedEnd && (
+                  <Button size="sm" variant="secondary" onClick={loadOlder} disabled={loadingOlder}>
+                    {loadingOlder ? (
+                      <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )}
+                    {loadingOlder ? "Loading…" : "Load older messages"}
+                  </Button>
+                )}
+                {accounts.some((a) => a.authKind === "gmail_oauth" || a.authKind === "imap") && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={backfillFromServer}
+                    disabled={backfilling}
+                    title="Pull the next 200 messages older than the oldest one shown"
+                  >
+                    {backfilling ? (
+                      <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )}
+                    {backfilling ? "Fetching older…" : "Fetch 200 older from server"}
+                  </Button>
+                )}
+                {reachedEnd && (
+                  <p className="text-[11px] text-ink-tertiary text-center">
+                    You've reached the oldest cached message.
+                  </p>
+                )}
+              </div>
+            )
           }
         />
       </section>
