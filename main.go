@@ -15,6 +15,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/db"
 	"github.com/mandloideep/miniclaw/internal/scheduler"
 	"github.com/mandloideep/miniclaw/internal/services/account"
+	"github.com/mandloideep/miniclaw/internal/services/digest"
 	"github.com/mandloideep/miniclaw/internal/services/email"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
@@ -55,19 +56,22 @@ func run() error {
 	llm := ollama.New()
 	summarizer := summary.New(pool, llm)
 	tg := telegram.New(pool)
+	wsSvc := workspace.New(pool)
+	digestSvc := digest.New(pool, accountSvc, wsSvc, tg)
 	app := application.New(application.Options{
 		Name:        "miniclaw",
 		Description: "Local-AI email triage with Telegram digests",
 		Services: []application.Service{
 			application.NewService(greet.New()),
 			application.NewService(keychain.New()),
-			application.NewService(workspace.New(pool)),
+			application.NewService(wsSvc),
 			application.NewService(accountSvc),
 			application.NewService(llm),
 			application.NewService(imapSyncer),
 			application.NewService(smtpSender),
 			application.NewService(summarizer),
 			application.NewService(tg),
+			application.NewService(digestSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -103,6 +107,7 @@ func run() error {
 		return nil
 	})
 	go sched.Start(schedCtx)
+	go digestSvc.Start(schedCtx)
 
 	go emitClockTick(app)
 	return app.Run()
