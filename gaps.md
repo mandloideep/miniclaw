@@ -21,9 +21,10 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 - [x] **Snooze.** Dropdown gained "Pick a time…" that opens a Dialog with a
       datetime-local input.
 - [x] **Search.** Inbox-pane search input wired to `Inbox.Search`.
-- [ ] **Reply / compose.** Reply works. Still missing: new-mail compose,
-      draft persistence, attachment upload (`Attachments` service has no
-      `Upload` binding yet).
+- [x] **Compose new mail.** Pencil button in the inbox header opens a Dialog
+      with from-account picker, To/Cc/Subject/Body. Sends via SMTPSender.Send.
+- [ ] **Attachments.** Compose still has no attachment upload. Reply has none
+      either. `Attachments` service exposes Get/GetInline but no Upload yet.
 - [ ] **Calendar promote → Google.** `planner.go` still writes
       `"pending:ID"`. Real Google sync is unimplemented on both sides.
 
@@ -31,15 +32,18 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 
 - [ ] **Gmail incremental sync.** `accounts.gmail_history_id` column exists,
       but neither sync path uses the History API. Full re-sync every pass.
-- [ ] **Todos.** No due-date filter or sort UI.
+- [x] **Todos.** Due-date input on the form, six filter buttons, and sorted
+      by dueAt ascending. Overdue rows tinted red.
 - [ ] **Calendar.** No conflict detection. Timezone handling assumes local;
       rows stored as UTC.
-- [ ] **Notes.** No markdown preview, no FTS within workspace.
+- [x] **Notes.** Markdown preview tab (tiny inline renderer for headings,
+      bold/italic, lists, fenced code, links). FTS within workspace still
+      missing.
 
-## Suggested order of attack for the rest
+## Remaining order of attack
 
-1. Compose-new + attachment upload (largest user-visible reply-side gap).
-2. Todos due-date sort + filter.
-3. Notes markdown preview (cheap polish).
+1. Calendar conflict detection (small lift, big UX win).
+2. Notes FTS (search across notes via SQLite FTS5).
+3. Attachment upload binding + UI (Compose/Reply file picker).
 4. Gmail incremental sync (scalability cliff, but invisible until then).
-5. Real Google Calendar sync (largest, OAuth-flow-heavy).
+5. Real Google Calendar 2-way sync (OAuth flow + provider work — biggest).
