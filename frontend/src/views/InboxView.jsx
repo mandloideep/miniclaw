@@ -276,6 +276,7 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
         <EmailReader
           detail={detail}
           onPutAside={refresh}
+          onSelectEmail={setSelectedId}
           onMarkedUnread={() => {
             setSelectedId(null);
             refresh();
@@ -405,17 +406,30 @@ function EmailRow({ email, active, onClick }) {
   );
 }
 
-function EmailReader({ detail, onPutAside, onMarkedUnread }) {
+function EmailReader({ detail, onPutAside, onMarkedUnread, onSelectEmail }) {
   const [replying, setReplying] = useState(false);
   const [showImages, setShowImages] = useState(false);
   const [snoozeBusy, setSnoozeBusy] = useState(false);
   const [customOpen, setCustomOpen] = useState(false);
   const [customValue, setCustomValue] = useState("");
+  const [thread, setThread] = useState([]);
+  const [threadOpen, setThreadOpen] = useState(false);
 
   useEffect(() => {
     setReplying(false);
     setShowImages(false);
+    setThreadOpen(false);
   }, []);
+
+  useEffect(() => {
+    if (!detail?.threadId) {
+      setThread([]);
+      return;
+    }
+    InboxApi.ListByThread(detail.threadId)
+      .then((rows) => setThread(rows || []))
+      .catch(() => setThread([]));
+  }, [detail?.threadId]);
 
   const handleSnooze = useCallback(
     async (kind) => {
@@ -584,6 +598,49 @@ function EmailReader({ detail, onPutAside, onMarkedUnread }) {
           </div>
         </div>
       </header>
+      {thread.length > 1 && (
+        <div className="px-6 py-2 border-b border-hairline bg-surface-1/40">
+          <button
+            type="button"
+            onClick={() => setThreadOpen((v) => !v)}
+            className="text-[12px] text-ink-muted hover:text-ink flex items-center gap-1.5"
+          >
+            <ChevronDown
+              className={`w-3 h-3 transition-transform ${threadOpen ? "" : "-rotate-90"}`}
+            />
+            Conversation ({thread.length} messages)
+          </button>
+          {threadOpen && (
+            <ul className="mt-2 space-y-1">
+              {thread.map((row) => {
+                const isCurrent = row.id === detail.id;
+                return (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      onClick={() => onSelectEmail?.(row.id)}
+                      disabled={isCurrent}
+                      className={`w-full text-left px-2 py-1.5 rounded text-[12px] flex items-center gap-2 ${
+                        isCurrent ? "bg-surface-2 text-ink" : "text-ink-muted hover:bg-surface-2"
+                      }`}
+                    >
+                      <span className="shrink-0 truncate max-w-[160px] text-ink">
+                        {row.fromName || row.fromAddress}
+                      </span>
+                      <span className="text-ink-tertiary truncate flex-1">
+                        {row.subject || "(no subject)"}
+                      </span>
+                      <span className="text-ink-tertiary shrink-0">
+                        {formatStamp(row.receivedAt)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
       <ScrollArea className="flex-1 px-6 py-5">
         {detail.bodyHtml && detail.bodyHtml.trim().length > 0 ? (
           <Tabs defaultValue="html">

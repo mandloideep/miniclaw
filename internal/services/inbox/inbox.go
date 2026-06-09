@@ -37,6 +37,7 @@ type EmailDetail struct {
 	BodyHTML string   `json:"bodyHtml"`
 	Headers  string   `json:"headers"`
 	Labels   []string `json:"labels"`
+	ThreadID string   `json:"threadId"`
 }
 
 // Service is the Wails-registered service.
@@ -115,6 +116,7 @@ func (s *Service) Get(ctx context.Context, id int64) (EmailDetail, error) {
 		SELECT e.id, e.account_id, e.from_address, e.from_name, e.to_addresses, e.cc_addresses,
 		       e.subject, e.received_at, e.body_plain, e.body_html, e.headers_json,
 		       e.is_read, e.is_put_aside, e.category,
+		       COALESCE(e.thread_id, ''),
 		       COALESCE(s.summary, ''),
 		       COALESCE(s.needs_attention, 0),
 		       COALESCE(s.attention_reason, '')
@@ -128,6 +130,7 @@ func (s *Service) Get(ctx context.Context, id int64) (EmailDetail, error) {
 		&d.ID, &d.AccountID, &d.FromAddress, &d.FromName, &d.To, &d.Cc,
 		&d.Subject, &d.ReceivedAt, &d.BodyPlain, &d.BodyHTML, &d.Headers,
 		&isRead, &isPutAside, &d.Category,
+		&d.ThreadID,
 		&d.Summary, &needs, &d.AttentionReason,
 	); err != nil {
 		return EmailDetail{}, fmt.Errorf("get email %d: %w", id, err)
@@ -255,6 +258,31 @@ LIMIT ?`
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ListByThread returns all emails sharing a thread ID, oldest first.
+// Empty threadID returns an empty slice — single-message threads have no
+// useful sibling list.
+func (s *Service) ListByThread(ctx context.Context, threadID string) ([]Email, error) {
+	if threadID == "" {
+		return []Email{}, nil
+	}
+	rows, err := s.q.ListEmailsByThread(ctx, threadID)
+	if err != nil {
+		return nil, fmt.Errorf("list emails by thread: %w", err)
+	}
+	out := make([]Email, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Email{
+			ID: r.ID, AccountID: r.AccountID,
+			FromAddress: r.FromAddress, FromName: r.FromName,
+			Subject: r.Subject, ReceivedAt: r.ReceivedAt,
+			BodyPlain: r.BodyPlain,
+			IsRead:    r.IsRead == 1, IsPutAside: r.IsPutAside == 1,
+			Category: r.Category,
+		})
+	}
+	return out, nil
 }
 
 // MarkRead flips the read bit on.
