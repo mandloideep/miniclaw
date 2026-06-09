@@ -28,6 +28,14 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -401,6 +409,8 @@ function EmailReader({ detail, onPutAside, onMarkedUnread }) {
   const [replying, setReplying] = useState(false);
   const [showImages, setShowImages] = useState(false);
   const [snoozeBusy, setSnoozeBusy] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customValue, setCustomValue] = useState("");
 
   useEffect(() => {
     setReplying(false);
@@ -422,6 +432,32 @@ function EmailReader({ detail, onPutAside, onMarkedUnread }) {
     },
     [detail, onPutAside],
   );
+
+  const openCustomPicker = useCallback(() => {
+    // Pre-fill with tomorrow 9am in local time so the input is editable
+    // immediately rather than blank.
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    setCustomValue(toLocalInputValue(d));
+    setCustomOpen(true);
+  }, []);
+
+  const handleCustomSnooze = useCallback(async () => {
+    if (!detail || !customValue) return;
+    const local = new Date(customValue);
+    if (Number.isNaN(local.getTime()) || local <= new Date()) {
+      return;
+    }
+    setSnoozeBusy(true);
+    try {
+      await Snooze.Snooze(detail.id, local.toISOString());
+      setCustomOpen(false);
+      onPutAside?.();
+    } finally {
+      setSnoozeBusy(false);
+    }
+  }, [detail, customValue, onPutAside]);
 
   if (!detail) {
     return (
@@ -517,6 +553,7 @@ function EmailReader({ detail, onPutAside, onMarkedUnread }) {
                 <DropdownMenuItem onSelect={() => handleSnooze("next-month")}>
                   Next month
                 </DropdownMenuItem>
+                <DropdownMenuItem onSelect={openCustomPicker}>Pick a time…</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={async () => {
@@ -572,6 +609,35 @@ function EmailReader({ detail, onPutAside, onMarkedUnread }) {
           </>
         )}
       </ScrollArea>
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Snooze until</DialogTitle>
+            <DialogDescription>
+              Pick a local date and time. The message reappears in the inbox at that point.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            type="datetime-local"
+            value={customValue}
+            onChange={(e) => setCustomValue(e.target.value)}
+            min={toLocalInputValue(new Date(Date.now() + 60_000))}
+          />
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setCustomOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleCustomSnooze} disabled={snoozeBusy || !customValue}>
+              {snoozeBusy ? (
+                <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Clock className="w-3.5 h-3.5" />
+              )}
+              Snooze
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -787,6 +853,13 @@ function nextSnoozeAt(kind) {
   // computed something <= now (clock skew, sub-second rounding).
   if (target <= now) target = new Date(now.getTime() + 60_000);
   return target.toISOString();
+}
+
+// toLocalInputValue formats a Date for a <input type="datetime-local"> field.
+// The input expects YYYY-MM-DDTHH:mm in local time, not ISO/UTC.
+function toLocalInputValue(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function formatStamp(iso, withTime = false) {
