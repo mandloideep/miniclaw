@@ -3,6 +3,7 @@
 
 import { Service as Accounts } from "../bindings/github.com/mandloideep/miniclaw/internal/services/account";
 import { Service as Attachments } from "../bindings/github.com/mandloideep/miniclaw/internal/services/attachments";
+import { Engine as Categories } from "../bindings/github.com/mandloideep/miniclaw/internal/services/categories";
 import { Service as Digest } from "../bindings/github.com/mandloideep/miniclaw/internal/services/digest";
 import {
   IMAPSyncer as IMAPSync,
@@ -38,6 +39,7 @@ export {
   Accounts,
   Attachments,
   Calendar,
+  Categories,
   Digest,
   GmailOAuth,
   IMAPSync,
