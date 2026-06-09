@@ -307,6 +307,7 @@ function ComposeDialog({ open, accounts, onClose }) {
   const [cc, setCc] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [attachments, setAttachments] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -322,7 +323,34 @@ function ComposeDialog({ open, accounts, onClose }) {
     setCc("");
     setSubject("");
     setBody("");
+    setAttachments([]);
     setErr("");
+  };
+
+  const addFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    const next = await Promise.all(
+      files.map(
+        (f) =>
+          new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onerror = () => reject(r.error);
+            r.onload = () => {
+              // FileReader returns "data:<mime>;base64,<payload>"; strip the prefix.
+              const data = String(r.result || "");
+              const comma = data.indexOf(",");
+              resolve({
+                key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                filename: f.name,
+                mime: f.type || "application/octet-stream",
+                dataBase64: comma >= 0 ? data.slice(comma + 1) : data,
+              });
+            };
+            r.readAsDataURL(f);
+          }),
+      ),
+    );
+    setAttachments((prev) => [...prev, ...next]);
   };
 
   const send = async () => {
@@ -338,6 +366,7 @@ function ComposeDialog({ open, accounts, onClose }) {
         cc: splitAddresses(cc),
         subject,
         body,
+        attachments,
       });
       reset();
       onClose();
@@ -420,6 +449,43 @@ function ComposeDialog({ open, accounts, onClose }) {
               onChange={(e) => setBody(e.target.value)}
               className="font-mono text-[13px]"
             />
+          </div>
+          <div>
+            <Label htmlFor="compose-files" className="text-xs">
+              Attachments
+            </Label>
+            <input
+              id="compose-files"
+              type="file"
+              multiple
+              onChange={(e) => {
+                addFiles(e.target.files);
+                e.target.value = "";
+              }}
+              className="block mt-1 text-[12px] text-ink-muted file:mr-2 file:px-2 file:py-1 file:rounded file:border file:border-hairline file:bg-surface-2 file:text-ink"
+            />
+            {attachments.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {attachments.map((a) => (
+                  <li key={a.key} className="flex items-center gap-2 text-[12px] text-ink-muted">
+                    <span className="flex-1 truncate">
+                      {a.filename}{" "}
+                      <span className="text-ink-tertiary">
+                        ({a.mime || "application/octet-stream"})
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachments((prev) => prev.filter((x) => x.key !== a.key))}
+                      className="text-ink-tertiary hover:text-danger"
+                      aria-label={`Remove ${a.filename}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           {err && <p className="text-[12px] text-danger">{err}</p>}
         </div>
