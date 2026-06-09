@@ -1,70 +1,112 @@
-import { Events, WML } from "@wailsio/runtime";
-import { useEffect, useState } from "react";
-import { Service as GreetService } from "../bindings/github.com/mandloideep/miniclaw/internal/services/greet";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Accounts, Keychain, Ollama, Workspaces } from "./api";
+import StatusBar from "./components/StatusBar";
+import TabBar from "./components/TabBar";
+import CategoriesView from "./views/CategoriesView";
+import FiltersView from "./views/FiltersView";
+import InboxView from "./views/InboxView";
+import PutAsideView from "./views/PutAsideView";
+import ScreenerView from "./views/ScreenerView";
+import SettingsView from "./views/SettingsView";
 
-function App() {
-  const [name, setName] = useState("");
-  const [result, setResult] = useState("Please enter your name below 👇");
-  const [time, setTime] = useState("Listening for Time event...");
+const TABS = [
+  { id: "inbox", label: "Inbox" },
+  { id: "put-aside", label: "Put Aside" },
+  { id: "screener", label: "Screener" },
+  { id: "filters", label: "Filters" },
+  { id: "categories", label: "Categories" },
+  { id: "settings", label: "Settings" },
+];
 
-  const doGreet = () => {
-    let localName = name;
-    if (!localName) {
-      localName = "anonymous";
-    }
-    GreetService.Greet(localName)
-      .then((resultValue) => {
-        setResult(resultValue);
-      })
-      .catch((err) => {
-        console.log(err);
-      });
-  };
+export default function App() {
+  const [tab, setTab] = useState("inbox");
+  const [workspaces, setWorkspaces] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(null);
+  const [ollamaStatus, setOllamaStatus] = useState({ running: false });
+  const [keychainOk, setKeychainOk] = useState(false);
 
-  useEffect(() => {
-    Events.On("time", (timeValue) => {
-      setTime(timeValue.data);
-    });
-    // Reload WML so it picks up the wml tags
-    WML.Reload();
+  const refreshWorkspaces = useCallback(async () => {
+    const ws = await Workspaces.List();
+    setWorkspaces(ws);
+    if (ws.length && activeWorkspaceId == null) setActiveWorkspaceId(ws[0].id);
+  }, [activeWorkspaceId]);
+
+  const refreshAccounts = useCallback(async () => {
+    setAccounts(await Accounts.List());
   }, []);
 
+  useEffect(() => {
+    refreshWorkspaces();
+    refreshAccounts();
+    Ollama.Status().then(setOllamaStatus);
+    Keychain.Available().then(setKeychainOk);
+    const t = setInterval(() => Ollama.Status().then(setOllamaStatus), 30000);
+    return () => clearInterval(t);
+  }, [refreshWorkspaces, refreshAccounts]);
+
+  const activeWorkspace = useMemo(
+    () => workspaces.find((w) => w.id === activeWorkspaceId) ?? null,
+    [workspaces, activeWorkspaceId],
+  );
+
+  const activeAccounts = useMemo(
+    () => (activeWorkspace ? accounts.filter((a) => a.workspaceId === activeWorkspace.id) : []),
+    [accounts, activeWorkspace],
+  );
+
   return (
-    <div className="container">
-      <div>
-        <a href="https://wails.io" data-wml-openURL="https://wails.io">
-          <img src="/wails.png" className="logo" alt="Wails logo" />
-        </a>
-        <a href="https://reactjs.org" data-wml-openURL="https://reactjs.org">
-          <img src="/react.svg" className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Wails + React</h1>
-      <div className="result">{result}</div>
-      <div className="card">
-        <div className="input-box">
-          <input
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            type="text"
-            autoComplete="off"
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <StatusBar ollama={ollamaStatus} keychainOk={keychainOk} />
+      <TabBar tabs={TABS} active={tab} onChange={setTab} />
+
+      {tab !== "settings" && workspaces.length > 0 && (
+        <WorkspacePicker
+          workspaces={workspaces}
+          activeId={activeWorkspaceId}
+          onPick={setActiveWorkspaceId}
+        />
+      )}
+
+      <main className="px-6 py-4">
+        {tab === "inbox" && <InboxView workspace={activeWorkspace} accounts={activeAccounts} />}
+        {tab === "put-aside" && <PutAsideView workspace={activeWorkspace} />}
+        {tab === "screener" && <ScreenerView accounts={activeAccounts} />}
+        {tab === "filters" && <FiltersView accounts={activeAccounts} />}
+        {tab === "categories" && (
+          <CategoriesView workspace={activeWorkspace} accounts={activeAccounts} />
+        )}
+        {tab === "settings" && (
+          <SettingsView
+            workspaces={workspaces}
+            accounts={accounts}
+            ollamaStatus={ollamaStatus}
+            onWorkspacesChanged={refreshWorkspaces}
+            onAccountsChanged={refreshAccounts}
           />
-          <button type="button" className="btn" onClick={doGreet}>
-            Greet
-          </button>
-        </div>
-      </div>
-      <div className="footer">
-        <div>
-          <p>Click on the Wails logo to learn more</p>
-        </div>
-        <div>
-          <p>{time}</p>
-        </div>
-      </div>
+        )}
+      </main>
     </div>
   );
 }
 
-export default App;
+function WorkspacePicker({ workspaces, activeId, onPick }) {
+  return (
+    <div className="flex gap-2 px-6 py-3 border-b border-zinc-800 overflow-x-auto">
+      {workspaces.map((w) => (
+        <button
+          key={w.id}
+          type="button"
+          onClick={() => onPick(w.id)}
+          className={`px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${
+            w.id === activeId
+              ? "bg-zinc-100 text-zinc-900"
+              : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+          }`}
+        >
+          {w.emoji} {w.name}
+        </button>
+      ))}
+    </div>
+  );
+}

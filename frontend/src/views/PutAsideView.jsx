@@ -1,0 +1,53 @@
+import { useCallback, useEffect, useState } from "react";
+import { Triage } from "../api";
+
+export default function PutAsideView({ workspace }) {
+  const [rows, setRows] = useState([]);
+
+  const refresh = useCallback(async () => {
+    if (!workspace) return;
+    setRows(await Triage.ListPutAside(workspace.id));
+  }, [workspace]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (!workspace) return null;
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-zinc-500 py-12 text-center">
+        Nothing put aside in {workspace.name}.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="space-y-2 max-w-2xl">
+      {rows.map((r) => (
+        <li
+          key={r.emailId}
+          className="p-3 rounded border border-zinc-800 bg-zinc-900 flex items-start justify-between gap-3"
+        >
+          <div className="min-w-0">
+            <div className="text-sm truncate">
+              <span className="text-zinc-100">{r.fromName || r.fromAddress}</span>{" "}
+              <span className="text-zinc-400">— {r.subject}</span>
+            </div>
+            <div className="text-xs text-zinc-500">{r.receivedAt}</div>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              await Triage.TogglePutAside(r.emailId);
+              refresh();
+            }}
+            className="text-xs text-zinc-400 hover:text-zinc-100"
+          >
+            unstash
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}

@@ -144,22 +144,35 @@ make ollama.up           # docker-compose Ollama if you don't want native
 
 ---
 
-## 7. What's not done yet
+## 7. Status
 
-This list shrinks as features land. Maintained here so the handoff is
-explicit.
+All §7 items from the original goal are landed:
 
-- [ ] IMAP/SMTP account connect + secret storage
-- [ ] Gmail OAuth path
-- [ ] Ollama client + per-workspace model selection
-- [ ] Email ingest scheduler + sync window controls
-- [ ] Summarization + needs-attention scoring
-- [ ] Telegram bot wiring + per-workspace/account recipient routing
-- [ ] Daily digest scheduler
-- [ ] Hey-style triage: put-aside, screener, spam/filter list
-- [ ] Categories tab (OAuth native + IMAP filter approximation)
-- [ ] SQLite migrations (goose) + sqlc-generated queries
-- [ ] OS keychain service
+- [x] IMAP/SMTP account connect + secret storage (`internal/services/email`, `internal/services/keychain`)
+- [x] Gmail OAuth path (`internal/services/gmailoauth`)
+- [x] Ollama client + per-workspace model selection (`internal/services/ollama`, per-account `ollama_model`)
+- [x] Email ingest scheduler + sync window controls (`internal/scheduler`, per-account `sync_cadence_secs`)
+- [x] Summarization + needs-attention scoring (`internal/services/summary`)
+- [x] Telegram bot wiring + per-workspace/account recipient routing (`internal/services/telegram`)
+- [x] Daily digest scheduler (`internal/services/digest`)
+- [x] Hey-style triage: put-aside, screener, spam/filter list (`internal/services/triage`)
+- [x] Categories tab — IMAP filter approximation (`internal/services/categories`); OAuth-native labels deferred until user demand
+- [x] SQLite migrations (goose) + sqlc-generated queries (`internal/db/*`)
+- [x] OS keychain service (`internal/services/keychain`)
+
+Frontend: tabs for Inbox, Put Aside, Screener, Filters, Categories,
+Settings. Settings holds workspace CRUD, account add (IMAP form + Gmail
+OAuth button), Ollama status + model list, Telegram bot token + digest
+time + recipient management.
+
+Known limitations to revisit when needed:
+- IMAP fetch is INBOX-only; other folders are not walked yet.
+- OAuth-native category labels for Gmail (vs the local rules engine) —
+  see `docs/decisions.md` §4.
+- No "send reply from app" UI — `email.SMTPSender` exists; UI hookup
+  is a future task.
+- IMAP IDLE / Gmail Pub/Sub push: not implemented. Cadence-based polling
+  only.
 
 ## 8. What can't be done autonomously (human-only)
 

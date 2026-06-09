@@ -20,6 +20,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/email"
 	"github.com/mandloideep/miniclaw/internal/services/gmailoauth"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
+	"github.com/mandloideep/miniclaw/internal/services/inbox"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
 	"github.com/mandloideep/miniclaw/internal/services/summary"
@@ -85,6 +86,7 @@ func run() error {
 			application.NewService(catEngine),
 			application.NewService(gmailAuth),
 			application.NewService(gmailSync),
+			application.NewService(inbox.New(pool)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
