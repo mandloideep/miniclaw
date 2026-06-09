@@ -85,31 +85,66 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 	}
 	defer func() { _ = c.Logout().Wait() }()
 
-	if _, err := c.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
-		return 0, fmt.Errorf("select INBOX: %w", err)
+	total := 0
+	for _, folder := range pickFolders(acc.FolderAllowlist) {
+		n, err := s.syncFolder(ctx, c, accountID, folder, acc.FetchSince)
+		if err != nil {
+			// Don't abort the whole pass on one folder failing — surface and continue.
+			fmt.Printf("imap sync: account %d folder %s: %v\n", accountID, folder, err)
+			continue
+		}
+		total += n
+	}
+	if err := s.accounts.MarkSynced(ctx, accountID); err != nil {
+		return total, fmt.Errorf("mark synced: %w", err)
+	}
+	return total, nil
+}
+
+// pickFolders parses the per-account allowlist CSV. Empty means INBOX only,
+// which is the safe default for any provider.
+func pickFolders(csv string) []string {
+	if csv == "" {
+		return []string{"INBOX"}
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, p := range parts {
+		f := strings.TrimSpace(p)
+		if f != "" && !seen[f] {
+			out = append(out, f)
+			seen[f] = true
+		}
+	}
+	if len(out) == 0 {
+		return []string{"INBOX"}
+	}
+	return out
+}
+
+// syncFolder selects a folder on an already-logged-in connection and
+// upserts every message above the stored UID watermark for that folder.
+func (s *IMAPSyncer) syncFolder(ctx context.Context, c *imapclient.Client, accountID int64, folder, fetchSince string) (int, error) {
+	if _, err := c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+		return 0, fmt.Errorf("select %s: %w", folder, err)
 	}
 
-	// Pick the most restrictive of: account.FetchSince and the latest UID
-	// we already stored. UID search cuts the wire chatter dramatically vs
-	// downloading every header.
 	criteria := &imap.SearchCriteria{}
-	if acc.FetchSince != "" {
-		t, perr := parseFetchSince(acc.FetchSince)
+	if fetchSince != "" {
+		t, perr := parseFetchSince(fetchSince)
 		if perr != nil {
 			return 0, perr
 		}
 		criteria.Since = t
 	}
 	maxUID, err := s.q.MaxUIDForFolder(ctx, sqlcgen.MaxUIDForFolderParams{
-		AccountID: accountID, Folder: "INBOX",
+		AccountID: accountID, Folder: folder,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("read max uid: %w", err)
 	}
 	if maxUID > 0 {
-		// MaxUIDForFolder is COALESCE(MAX(uid),0); IMAP UIDs are uint32, but
-		// our store widens to int64. Clamp before narrowing — though in
-		// practice no real mailbox reaches 2^32 UIDs.
 		next := maxUID + 1
 		if next < 0 || next > 0xFFFFFFFF {
 			next = 0xFFFFFFFF
@@ -155,14 +190,12 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 		to := joinAddresses(msg.Envelope.To)
 		cc := joinAddresses(msg.Envelope.Cc)
 
-		// Filter-rule check — drop blocked senders before they hit the store.
 		if s.triage != nil {
 			blocked, blockErr := s.triage.MatchesBlock(ctx, accountID, from.address)
 			if blockErr == nil && blocked {
 				continue
 			}
 		}
-		// Register sender for the screener; idempotent.
 		if s.triage != nil {
 			_ = s.triage.RegisterSender(ctx, accountID, from.address)
 		}
@@ -170,7 +203,7 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 		id, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
 			AccountID:   accountID,
 			MessageID:   msg.Envelope.MessageID,
-			Folder:      "INBOX",
+			Folder:      folder,
 			Uid:         sql.NullInt64{Int64: int64(msg.UID), Valid: true},
 			FromAddress: from.address,
 			FromName:    from.name,
@@ -191,9 +224,6 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 			}
 		}
 		written++
-	}
-	if err := s.accounts.MarkSynced(ctx, accountID); err != nil {
-		return written, fmt.Errorf("mark synced: %w", err)
 	}
 	return written, nil
 }

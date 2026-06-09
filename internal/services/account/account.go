@@ -24,6 +24,7 @@ type AuthKind string
 const (
 	AuthIMAP       AuthKind = "imap"
 	AuthGmailOAuth AuthKind = "gmail_oauth"
+	AuthMSOAuth    AuthKind = "ms_oauth"
 )
 
 // Account is the frontend-facing shape. We never expose secret material here.
@@ -41,6 +42,7 @@ type Account struct {
 	SyncCadenceSecs int64    `json:"syncCadenceSecs"`
 	LastSyncedAt    string   `json:"lastSyncedAt,omitempty"`
 	OllamaModel     string   `json:"ollamaModel"`
+	FolderAllowlist string   `json:"folderAllowlist,omitempty"`
 	CreatedAt       string   `json:"createdAt"`
 	UpdatedAt       string   `json:"updatedAt"`
 }
@@ -266,7 +268,46 @@ func toAccount(r sqlcgen.Account) Account {
 		SyncCadenceSecs: r.SyncCadenceSecs,
 		LastSyncedAt:    r.LastSyncedAt.String,
 		OllamaModel:     r.OllamaModel,
+		FolderAllowlist: r.FolderAllowlist,
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 	}
+}
+
+// AddMSOAuth persists a Microsoft Graph OAuth account.
+func (s *Service) AddMSOAuth(ctx context.Context, c OAuthCreds) (Account, error) {
+	switch {
+	case c.WorkspaceID == 0:
+		return Account{}, errors.New("workspace is required")
+	case c.EmailAddress == "":
+		return Account{}, errors.New("email address is required")
+	case c.RefreshToken == "":
+		return Account{}, errors.New("refresh token is required")
+	}
+	ref := secretRef(AuthMSOAuth, c.EmailAddress)
+	if err := keychain.Set(ref, c.RefreshToken); err != nil {
+		return Account{}, fmt.Errorf("store refresh token: %w", err)
+	}
+	r, err := s.q.CreateMSOAuthAccount(ctx, sqlcgen.CreateMSOAuthAccountParams{
+		WorkspaceID:     c.WorkspaceID,
+		DisplayName:     c.DisplayName,
+		EmailAddress:    c.EmailAddress,
+		SecretRef:       ref,
+		FetchSince:      sql.NullString{String: c.FetchSince, Valid: c.FetchSince != ""},
+		SyncCadenceSecs: 300,
+		OllamaModel:     c.OllamaModel,
+	})
+	if err != nil {
+		_ = keychain.Delete(ref)
+		return Account{}, fmt.Errorf("create account: %w", err)
+	}
+	return toAccount(r), nil
+}
+
+// SetFolderAllowlist updates the per-account IMAP folder allowlist (CSV).
+// Empty string means "INBOX only".
+func (s *Service) SetFolderAllowlist(ctx context.Context, id int64, csv string) error {
+	return s.q.UpdateFolderAllowlist(ctx, sqlcgen.UpdateFolderAllowlistParams{
+		FolderAllowlist: csv, ID: id,
+	})
 }

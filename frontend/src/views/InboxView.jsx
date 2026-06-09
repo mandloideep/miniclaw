@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, Triage } from "../api";
+import { Inbox, SMTPSender, Triage } from "../api";
 
 export default function InboxView({ workspace, accounts }) {
   const [emails, setEmails] = useState([]);
@@ -100,6 +100,8 @@ function EmailRow({ email, active, onClick, onPutAside }) {
 }
 
 function EmailDetail({ email }) {
+  const [replying, setReplying] = useState(false);
+
   if (!email) {
     return (
       <div className="text-zinc-500 text-sm flex items-center justify-center min-h-[40vh]">
@@ -109,13 +111,94 @@ function EmailDetail({ email }) {
   }
   return (
     <article className="bg-zinc-900 border border-zinc-800 rounded p-4 max-h-[70vh] overflow-y-auto">
-      <h2 className="text-lg font-medium mb-1">{email.subject}</h2>
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <h2 className="text-lg font-medium">{email.subject}</h2>
+        {!replying && (
+          <button
+            type="button"
+            onClick={() => setReplying(true)}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 whitespace-nowrap"
+          >
+            Reply
+          </button>
+        )}
+      </div>
       <div className="text-xs text-zinc-500 mb-4">
         {email.fromName ? `${email.fromName} — ` : ""}
         {email.fromAddress} · {email.receivedAt}
       </div>
       <pre className="whitespace-pre-wrap text-sm text-zinc-200 font-sans">{email.bodyPlain}</pre>
+
+      {replying && (
+        <ReplyComposer
+          email={email}
+          onClose={() => setReplying(false)}
+          onSent={() => setReplying(false)}
+        />
+      )}
     </article>
+  );
+}
+
+function ReplyComposer({ email, onClose, onSent }) {
+  const [body, setBody] = useState(
+    `\n\nOn ${email.receivedAt}, ${email.fromName || email.fromAddress} wrote:\n> ${email.bodyPlain.split("\n").join("\n> ")}`,
+  );
+  const [subject, setSubject] = useState(
+    email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function send() {
+    setBusy(true);
+    setErr("");
+    try {
+      await SMTPSender.Send(email.accountId, {
+        to: [email.fromAddress],
+        cc: [],
+        subject,
+        body,
+      });
+      onSent();
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 border border-zinc-700 rounded p-3 bg-zinc-950">
+      <div className="text-xs text-zinc-500 mb-2">
+        To: <span className="text-zinc-300">{email.fromAddress}</span>
+      </div>
+      <input
+        value={subject}
+        onChange={(e) => setSubject(e.target.value)}
+        className="w-full px-2 py-1.5 mb-2 bg-zinc-900 border border-zinc-700 rounded text-sm"
+      />
+      <textarea
+        rows={10}
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        className="w-full px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm font-mono"
+      />
+      {err && <p className="mt-2 text-xs text-rose-400">{err}</p>}
+      <div className="flex gap-2 mt-2">
+        <button
+          type="button"
+          onClick={send}
+          disabled={busy}
+          className="px-3 py-1.5 rounded bg-emerald-700 text-sm disabled:opacity-50"
+        >
+          {busy ? "Sending…" : "Send"}
+        </button>
+        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-zinc-800 text-sm">
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 

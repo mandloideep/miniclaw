@@ -15,6 +15,7 @@ type Querier interface {
 	AssignRecipientToWorkspace(ctx context.Context, arg AssignRecipientToWorkspaceParams) error
 	BlockSender(ctx context.Context, id int64) error
 	CreateIMAPAccount(ctx context.Context, arg CreateIMAPAccountParams) (Account, error)
+	CreateMSOAuthAccount(ctx context.Context, arg CreateMSOAuthAccountParams) (Account, error)
 	CreateOAuthAccount(ctx context.Context, arg CreateOAuthAccountParams) (Account, error)
 	CreateRecipient(ctx context.Context, arg CreateRecipientParams) (TelegramRecipient, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
@@ -59,6 +60,7 @@ type Querier interface {
 	UpdateAccountFetchSince(ctx context.Context, arg UpdateAccountFetchSinceParams) error
 	UpdateAccountModel(ctx context.Context, arg UpdateAccountModelParams) error
 	UpdateAccountSync(ctx context.Context, id int64) error
+	UpdateFolderAllowlist(ctx context.Context, arg UpdateFolderAllowlistParams) error
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) error
 	UpsertEmail(ctx context.Context, arg UpsertEmailParams) (int64, error)
 	UpsertSender(ctx context.Context, arg UpsertSenderParams) error

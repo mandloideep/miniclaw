@@ -19,7 +19,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          created_at, updated_at
+          folder_allowlist, created_at, updated_at
 `
 
 type CreateIMAPAccountParams struct {
@@ -66,6 +66,61 @@ func (q *Queries) CreateIMAPAccount(ctx context.Context, arg CreateIMAPAccountPa
 		&i.SyncCadenceSecs,
 		&i.LastSyncedAt,
 		&i.OllamaModel,
+		&i.FolderAllowlist,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createMSOAuthAccount = `-- name: CreateMSOAuthAccount :one
+INSERT INTO accounts (
+    workspace_id, display_name, email_address, auth_kind,
+    secret_ref, fetch_since, sync_cadence_secs, ollama_model
+) VALUES (?, ?, ?, 'ms_oauth', ?, ?, ?, ?)
+RETURNING id, workspace_id, display_name, email_address, auth_kind,
+          imap_host, imap_port, smtp_host, smtp_port, secret_ref,
+          fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
+          folder_allowlist, created_at, updated_at
+`
+
+type CreateMSOAuthAccountParams struct {
+	WorkspaceID     int64
+	DisplayName     string
+	EmailAddress    string
+	SecretRef       string
+	FetchSince      sql.NullString
+	SyncCadenceSecs int64
+	OllamaModel     string
+}
+
+func (q *Queries) CreateMSOAuthAccount(ctx context.Context, arg CreateMSOAuthAccountParams) (Account, error) {
+	row := q.db.QueryRowContext(ctx, createMSOAuthAccount,
+		arg.WorkspaceID,
+		arg.DisplayName,
+		arg.EmailAddress,
+		arg.SecretRef,
+		arg.FetchSince,
+		arg.SyncCadenceSecs,
+		arg.OllamaModel,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DisplayName,
+		&i.EmailAddress,
+		&i.AuthKind,
+		&i.ImapHost,
+		&i.ImapPort,
+		&i.SmtpHost,
+		&i.SmtpPort,
+		&i.SecretRef,
+		&i.FetchSince,
+		&i.SyncCadenceSecs,
+		&i.LastSyncedAt,
+		&i.OllamaModel,
+		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -80,7 +135,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          created_at, updated_at
+          folder_allowlist, created_at, updated_at
 `
 
 type CreateOAuthAccountParams struct {
@@ -119,6 +174,7 @@ func (q *Queries) CreateOAuthAccount(ctx context.Context, arg CreateOAuthAccount
 		&i.SyncCadenceSecs,
 		&i.LastSyncedAt,
 		&i.OllamaModel,
+		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -138,7 +194,7 @@ const getAccount = `-- name: GetAccount :one
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       created_at, updated_at
+       folder_allowlist, created_at, updated_at
 FROM accounts
 WHERE id = ?
 `
@@ -161,6 +217,7 @@ func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
 		&i.SyncCadenceSecs,
 		&i.LastSyncedAt,
 		&i.OllamaModel,
+		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -171,7 +228,7 @@ const listAccounts = `-- name: ListAccounts :many
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       created_at, updated_at
+       folder_allowlist, created_at, updated_at
 FROM accounts
 ORDER BY workspace_id, id
 `
@@ -200,6 +257,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.SyncCadenceSecs,
 			&i.LastSyncedAt,
 			&i.OllamaModel,
+			&i.FolderAllowlist,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -220,7 +278,7 @@ const listAccountsByWorkspace = `-- name: ListAccountsByWorkspace :many
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       created_at, updated_at
+       folder_allowlist, created_at, updated_at
 FROM accounts
 WHERE workspace_id = ?
 ORDER BY id
@@ -250,6 +308,7 @@ func (q *Queries) ListAccountsByWorkspace(ctx context.Context, workspaceID int64
 			&i.SyncCadenceSecs,
 			&i.LastSyncedAt,
 			&i.OllamaModel,
+			&i.FolderAllowlist,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -322,5 +381,19 @@ WHERE id = ?
 
 func (q *Queries) UpdateAccountSync(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, updateAccountSync, id)
+	return err
+}
+
+const updateFolderAllowlist = `-- name: UpdateFolderAllowlist :exec
+UPDATE accounts SET folder_allowlist = ?, updated_at = datetime('now') WHERE id = ?
+`
+
+type UpdateFolderAllowlistParams struct {
+	FolderAllowlist string
+	ID              int64
+}
+
+func (q *Queries) UpdateFolderAllowlist(ctx context.Context, arg UpdateFolderAllowlistParams) error {
+	_, err := q.db.ExecContext(ctx, updateFolderAllowlist, arg.FolderAllowlist, arg.ID)
 	return err
 }

@@ -23,6 +23,7 @@ type Account struct {
 	SyncCadenceSecs int64
 	LastSyncedAt    sql.NullString
 	OllamaModel     string
+	FolderAllowlist string
 	CreatedAt       string
 	UpdatedAt       string
 }

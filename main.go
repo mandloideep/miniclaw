@@ -22,6 +22,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/greet"
 	"github.com/mandloideep/miniclaw/internal/services/inbox"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
+	"github.com/mandloideep/miniclaw/internal/services/msoauth"
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
 	"github.com/mandloideep/miniclaw/internal/services/summary"
 	"github.com/mandloideep/miniclaw/internal/services/telegram"
@@ -62,6 +63,8 @@ func run() error {
 	})
 	gmailSync := gmailoauth.NewSyncer(pool, accountSvc)
 	gmailAuth := gmailoauth.New()
+	msSync := msoauth.NewSyncer(pool, accountSvc)
+	msAuth := msoauth.New()
 	smtpSender := email.NewSMTPSender(accountSvc)
 	llm := ollama.New()
 	summarizer := summary.New(pool, llm)
@@ -86,6 +89,8 @@ func run() error {
 			application.NewService(catEngine),
 			application.NewService(gmailAuth),
 			application.NewService(gmailSync),
+			application.NewService(msAuth),
+			application.NewService(msSync),
 			application.NewService(inbox.New(pool)),
 		},
 		Assets: application.AssetOptions{
@@ -128,12 +133,29 @@ func run() error {
 			if _, e := gmailSync.Sync(c, accountID); e != nil {
 				return e
 			}
+		case account.AuthMSOAuth:
+			if _, e := msSync.Sync(c, accountID); e != nil {
+				return e
+			}
 		}
 		_, _ = summarizer.Summarize(c, accountID)
 		return nil
 	})
 	go sched.Start(schedCtx)
 	go digestSvc.Start(schedCtx)
+
+	// Real-time IMAP push: keeps one IDLE connection per IMAP account so new
+	// mail is noticed within hundreds of ms instead of waiting for the next
+	// cadence tick. Failures back off and reconnect; non-IMAP accounts are
+	// ignored.
+	idleSvc := email.NewIDLE(accountSvc, func(c context.Context, accountID int64) {
+		if _, e := imapSyncer.Sync(c, accountID); e != nil {
+			log.Printf("idle sync account %d: %v", accountID, e)
+			return
+		}
+		_, _ = summarizer.Summarize(c, accountID)
+	})
+	go idleSvc.Start(schedCtx)
 
 	go emitClockTick(app)
 	return app.Run()

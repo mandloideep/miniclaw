@@ -79,21 +79,53 @@ Secrets are stored in the OS keychain via a Wails service. The SQLite row
 holds only host, port, username, and a keychain reference — never the
 password itself.
 
-### Gmail OAuth (deferred — wired second)
-
-When this lands you'll need to:
+### Gmail OAuth
 
 1. Create a project at https://console.cloud.google.com.
 2. Enable the **Gmail API**.
 3. Create OAuth client credentials, type **Desktop app**.
-4. Add `http://localhost:<port>/oauth/callback` as a redirect URI (port
-   chosen at runtime).
-5. Drop the downloaded JSON at `~/.miniclaw/google_oauth_client.json` (or
-   point the app at it via the settings UI).
-6. First connect kicks off browser consent; refresh tokens persist in the
-   OS keychain.
+4. The loopback redirect (`http://127.0.0.1:<random-port>/callback`) is
+   registered at runtime — no need to pre-register URIs.
+5. Drop the downloaded JSON at `~/.miniclaw/google_oauth_client.json`.
+6. In Settings → Add account → **Gmail OAuth** → Sign in with Google.
+   Refresh token lives in the OS keychain under
+   `gmail_oauth:<email>`. miniclaw also reads `labelIds` on each message
+   so Gmail's native CATEGORY_PROMOTIONS/SOCIAL/UPDATES/FORUMS labels
+   feed the Categories tab directly.
 
-This path is not implemented yet. Tracked in `docs/decisions.md` §1.
+### Microsoft OAuth (Outlook, Hotmail, Live, M365)
+
+1. Go to https://portal.azure.com → Azure Active Directory →
+   **App registrations** → New registration.
+2. Pick **Accounts in any organizational directory + personal Microsoft
+   accounts** (multi-tenant + consumers) so personal Outlook/Hotmail
+   accounts work alongside work/school.
+3. Redirect URI: add a **Public client/native** URI of
+   `http://localhost`. miniclaw will use `http://127.0.0.1:<random-port>`
+   at runtime; Azure treats loopback as a wildcard for public clients.
+4. API permissions → Add → **Microsoft Graph → Delegated** →
+   `Mail.Read`, `User.Read`, `offline_access`. Grant admin consent if
+   you need a work tenant.
+5. From the app's **Overview** page, copy the **Application (client) ID**.
+6. Save to `~/.miniclaw/ms_oauth_client.json` as:
+   ```json
+   { "client_id": "YOUR-CLIENT-ID-GUID", "tenant": "common" }
+   ```
+   Use `"tenant": "<your-tenant-guid>"` for single-tenant apps.
+7. Settings → Add account → **Microsoft OAuth** → Sign in. The refresh
+   token lands in the keychain under `ms_oauth:<email>`. Sync uses
+   Microsoft Graph `/me/mailFolders/Inbox/messages`.
+
+### Yahoo
+
+Yahoo's OAuth program is partner-only — there is no public developer
+registration that grants Mail API access. **Use IMAP/SMTP instead:**
+
+1. Yahoo Account → **Account Info → Account Security**.
+2. Turn on 2-Step Verification.
+3. Generate an **App password** (label it "miniclaw").
+4. Add account in Settings as IMAP/SMTP with
+   `imap.mail.yahoo.com:993` and `smtp.mail.yahoo.com:465`.
 
 ---
 
@@ -165,14 +197,27 @@ Settings. Settings holds workspace CRUD, account add (IMAP form + Gmail
 OAuth button), Ollama status + model list, Telegram bot token + digest
 time + recipient management.
 
-Known limitations to revisit when needed:
-- IMAP fetch is INBOX-only; other folders are not walked yet.
-- OAuth-native category labels for Gmail (vs the local rules engine) —
-  see `docs/decisions.md` §4.
-- No "send reply from app" UI — `email.SMTPSender` exists; UI hookup
-  is a future task.
-- IMAP IDLE / Gmail Pub/Sub push: not implemented. Cadence-based polling
-  only.
+Address-of-limitations log (all previously-known items resolved):
+- IMAP multi-folder walk: per-account `folder_allowlist` (CSV) drives a
+  per-folder sync loop on one connection; INBOX is the default when
+  empty.
+- Gmail native labels: `gmailoauth` reads `labelIds` from
+  `messages.get` and maps CATEGORY_PROMOTIONS/SOCIAL/UPDATES/FORUMS to
+  the Categories tab; local rules engine is the fallback.
+- Reply from app: inbox reading pane has a Reply button that opens a
+  composer and calls `SMTPSender.Send`.
+- IMAP push: `email.IDLE` keeps one IMAP IDLE connection per IMAP
+  account, rotates every 25 minutes, debounces bursts, and triggers
+  ingest+summarise within hundreds of ms of a new message landing.
+- Microsoft OAuth: full PKCE loopback flow against Microsoft identity,
+  Graph-API sync from `/me/mailFolders/Inbox/messages`.
+
+Still optional, not yet wired (low-priority, will land on demand):
+- Gmail Pub/Sub watch (IDLE-equivalent for OAuth Gmail) — uses GCP
+  Pub/Sub and a public webhook; IMAP IDLE covers most users.
+- Per-account UI for `folder_allowlist` editing (the backend column +
+  service method exist; add an input to Settings → Accounts when a
+  user asks).
 
 ## 8. What can't be done autonomously (human-only)
 

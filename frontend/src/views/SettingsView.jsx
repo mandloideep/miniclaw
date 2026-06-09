@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Accounts, Digest, GmailOAuth, Ollama, Telegram, Workspaces } from "../api";
+import { Accounts, Digest, GmailOAuth, MSOAuth, Ollama, Telegram, Workspaces } from "../api";
 
 export default function SettingsView({
   workspaces,
@@ -177,9 +177,19 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
           imapPort: Number(form.imapPort),
           smtpPort: Number(form.smtpPort),
         });
-      } else {
+      } else if (kind === "gmail_oauth") {
         const res = await GmailOAuth.StartAuthorize();
         await Accounts.AddGmailOAuth({
+          workspaceId: Number(form.workspaceId),
+          displayName: form.displayName || res.EmailAddress,
+          emailAddress: res.EmailAddress,
+          refreshToken: res.RefreshToken,
+          fetchSince: form.fetchSince,
+          ollamaModel: form.ollamaModel,
+        });
+      } else if (kind === "ms_oauth") {
+        const res = await MSOAuth.StartAuthorize();
+        await Accounts.AddMSOAuth({
           workspaceId: Number(form.workspaceId),
           displayName: form.displayName || res.EmailAddress,
           emailAddress: res.EmailAddress,
@@ -199,7 +209,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
   return (
     <form onSubmit={submit} className="space-y-2 border border-zinc-800 rounded p-3">
       <div className="flex gap-2">
-        {["imap", "gmail_oauth"].map((k) => (
+        {["imap", "gmail_oauth", "ms_oauth"].map((k) => (
           <button
             key={k}
             type="button"
@@ -208,7 +218,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
               kind === k ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800"
             }`}
           >
-            {k === "imap" ? "IMAP/SMTP" : "Gmail OAuth"}
+            {k === "imap" ? "IMAP/SMTP" : k === "gmail_oauth" ? "Gmail OAuth" : "Microsoft OAuth"}
           </button>
         ))}
       </div>
@@ -306,7 +316,13 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
           disabled={busy}
           className="px-3 py-1.5 rounded bg-emerald-700 text-sm disabled:opacity-50"
         >
-          {busy ? "Working…" : kind === "imap" ? "Add" : "Sign in with Google"}
+          {busy
+            ? "Working…"
+            : kind === "imap"
+              ? "Add"
+              : kind === "gmail_oauth"
+                ? "Sign in with Google"
+                : "Sign in with Microsoft"}
         </button>
         <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-zinc-800 text-sm">
           Cancel

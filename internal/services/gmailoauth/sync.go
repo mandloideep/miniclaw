@@ -60,7 +60,7 @@ func (s *Syncer) Sync(ctx context.Context, accountID int64) (int, error) {
 		if ferr != nil {
 			continue
 		}
-		_, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
+		id2, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
 			AccountID:   accountID,
 			MessageID:   msg.MessageID,
 			Folder:      "INBOX",
@@ -76,6 +76,11 @@ func (s *Syncer) Sync(ctx context.Context, accountID int64) (int, error) {
 			HeadersJson: msg.HeadersJSON,
 		})
 		if err == nil {
+			if msg.Category != "" {
+				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{
+					Category: msg.Category, ID: id2,
+				})
+			}
 			written++
 		}
 	}
@@ -149,6 +154,7 @@ type gmailMessage struct {
 	BodyPlain   string
 	BodyHTML    string
 	HeadersJSON string
+	Category    string // mapped from Gmail labelIds; empty if not categorisable
 }
 
 func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMessage, error) {
@@ -163,8 +169,9 @@ func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMes
 		return gmailMessage{}, fmt.Errorf("messages.get: %s", resp.Status)
 	}
 	var body struct {
-		ID           string `json:"id"`
-		InternalDate string `json:"internalDate"` // unix millis
+		ID           string   `json:"id"`
+		LabelIds     []string `json:"labelIds"`
+		InternalDate string   `json:"internalDate"` // unix millis
 		Payload      struct {
 			Headers []struct {
 				Name  string `json:"name"`
@@ -190,6 +197,7 @@ func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMes
 		ReceivedAt: internalDateToRFC3339(body.InternalDate),
 		BodyPlain:  walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/plain"),
 		BodyHTML:   walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/html"),
+		Category:   categoryFromLabels(body.LabelIds),
 	}
 	if out.MessageID == "" {
 		out.MessageID = body.ID // fallback so dedupe still works
@@ -261,3 +269,22 @@ func splitAddress(raw string) (name, addr string) {
 // secretRefFor must match account.secretRef but lives here to avoid an
 // import cycle.
 func secretRefFor(email string) string { return "gmail_oauth:" + email }
+
+// categoryFromLabels maps Gmail's CATEGORY_* system labels into our enum.
+// First match wins; returns "" if no match so the local rules engine can
+// take over for non-Gmail-categorised mail.
+func categoryFromLabels(labels []string) string {
+	for _, l := range labels {
+		switch l {
+		case "CATEGORY_PROMOTIONS":
+			return "promotions"
+		case "CATEGORY_SOCIAL":
+			return "social"
+		case "CATEGORY_UPDATES":
+			return "updates"
+		case "CATEGORY_FORUMS":
+			return "newsletter"
+		}
+	}
+	return ""
+}
