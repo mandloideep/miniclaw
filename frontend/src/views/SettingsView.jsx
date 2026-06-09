@@ -155,6 +155,142 @@ function WorkspacesSection({ workspaces, onChange }) {
   );
 }
 
+function AccountRow({ account, workspace, models, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [cadence, setCadence] = useState(account.syncCadenceSecs || 300);
+  const [allowlist, setAllowlist] = useState(account.folderAllowlist || "");
+  const [model, setModel] = useState(account.ollamaModel || "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const isIMAP = account.authKind === "imap";
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const work = [];
+      if (Number(cadence) !== account.syncCadenceSecs) {
+        work.push(Accounts.SetCadence(account.id, Number(cadence)));
+      }
+      if (model !== (account.ollamaModel || "")) {
+        work.push(Accounts.SetModel(account.id, model));
+      }
+      if (isIMAP && allowlist !== (account.folderAllowlist || "")) {
+        work.push(Accounts.SetFolderAllowlist(account.id, allowlist));
+      }
+      await Promise.all(work);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      onChange();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <li className="border border-hairline rounded">
+      <div className="px-3 py-2 flex justify-between items-start">
+        <button
+          type="button"
+          className="text-left flex-1 min-w-0"
+          onClick={() => setOpen((v) => !v)}
+        >
+          <div className="text-sm">
+            {account.emailAddress}{" "}
+            <span className="text-xs text-ink-subtle">({account.authKind})</span>
+          </div>
+          <div className="text-xs text-ink-subtle">
+            {workspace ? `${workspace.emoji} ${workspace.name}` : "—"} ·{" "}
+            {account.lastSyncedAt ? `synced ${account.lastSyncedAt}` : "never synced"} · every{" "}
+            {Math.round((account.syncCadenceSecs || 300) / 60)} min · model:{" "}
+            {account.ollamaModel || "(default)"}
+          </div>
+        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            className="text-xs text-ink-subtle hover:text-ink"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? "close" : "edit"}
+          </button>
+          <DestructiveConfirm
+            title={`Remove ${account.emailAddress}?`}
+            description="Cached emails and the keychain secret are removed locally. The mailbox on the provider stays untouched."
+            confirmLabel="Remove account"
+            onConfirm={async () => {
+              await Accounts.Delete(account.id);
+              onChange();
+            }}
+            trigger={
+              <button type="button" className="text-xs text-ink-subtle hover:text-danger">
+                remove
+              </button>
+            }
+          />
+        </div>
+      </div>
+      {open && (
+        <div className="px-3 pb-3 pt-1 border-t border-hairline space-y-2.5">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor={`acc-${account.id}-cadence`} className="text-xs">
+                Sync every (seconds, min 30)
+              </Label>
+              <Input
+                id={`acc-${account.id}-cadence`}
+                type="number"
+                min={30}
+                value={cadence}
+                onChange={(e) => setCadence(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor={`acc-${account.id}-model`} className="text-xs">
+                Ollama model
+              </Label>
+              <select
+                id={`acc-${account.id}-model`}
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="mt-1 w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
+              >
+                <option value="">(workspace default)</option>
+                {models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {isIMAP && (
+            <div>
+              <Label htmlFor={`acc-${account.id}-folders`} className="text-xs">
+                Folder allowlist (comma-separated; empty = INBOX only)
+              </Label>
+              <Input
+                id={`acc-${account.id}-folders`}
+                placeholder="INBOX, [Gmail]/All Mail"
+                value={allowlist}
+                onChange={(e) => setAllowlist(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <Button size="sm" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            {saved && <span className="text-xs text-ink-subtle">Saved.</span>}
+          </div>
+        </div>
+      )}
+    </li>
+  );
+}
+
 function AccountsSection({ workspaces, accounts, onChange }) {
   const [showAdd, setShowAdd] = useState(false);
   const [models, setModels] = useState([]);
@@ -166,40 +302,15 @@ function AccountsSection({ workspaces, accounts, onChange }) {
   return (
     <Section title="Accounts">
       <ul className="space-y-1.5 mb-3">
-        {accounts.map((a) => {
-          const ws = workspaces.find((w) => w.id === a.workspaceId);
-          return (
-            <li
-              key={a.id}
-              className="px-3 py-2 border border-hairline rounded flex justify-between items-start"
-            >
-              <div>
-                <div className="text-sm">
-                  {a.emailAddress} <span className="text-xs text-ink-subtle">({a.authKind})</span>
-                </div>
-                <div className="text-xs text-ink-subtle">
-                  {ws ? `${ws.emoji} ${ws.name}` : "—"} ·{" "}
-                  {a.lastSyncedAt ? `synced ${a.lastSyncedAt}` : "never synced"} · model:{" "}
-                  {a.ollamaModel || "(default)"}
-                </div>
-              </div>
-              <DestructiveConfirm
-                title={`Remove ${a.emailAddress}?`}
-                description="Cached emails and the keychain secret are removed locally. The mailbox on the provider stays untouched."
-                confirmLabel="Remove account"
-                onConfirm={async () => {
-                  await Accounts.Delete(a.id);
-                  onChange();
-                }}
-                trigger={
-                  <button type="button" className="text-xs text-ink-subtle hover:text-danger">
-                    remove
-                  </button>
-                }
-              />
-            </li>
-          );
-        })}
+        {accounts.map((a) => (
+          <AccountRow
+            key={a.id}
+            account={a}
+            workspace={workspaces.find((w) => w.id === a.workspaceId)}
+            models={models}
+            onChange={onChange}
+          />
+        ))}
       </ul>
       {showAdd ? (
         <AddAccountForm
