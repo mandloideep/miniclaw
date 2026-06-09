@@ -30,12 +30,14 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 
 ## Genuinely unbuilt (both sides)
 
-- [ ] **Gmail incremental sync.** `accounts.gmail_history_id` column exists,
-      but neither sync path uses the History API. Full re-sync every pass.
+- [x] **Gmail incremental sync.** Already wired in `gmailoauth/sync.go` —
+      `listHistoryMessageIDs` consults `users.history.list` when a cursor is
+      stored, falls back to the date-bounded `messages.list` if expired.
+      Initial audit was wrong; nothing to do here.
 - [x] **Todos.** Due-date input on the form, six filter buttons, and sorted
       by dueAt ascending. Overdue rows tinted red.
-- [ ] **Calendar.** No conflict detection. Timezone handling assumes local;
-      rows stored as UTC.
+- [x] **Calendar conflict detection.** Overlapping blocks are tinted red
+      and list the conflicting block titles. Timezone handling still local-only.
 - [x] **Notes.** Markdown preview tab (tiny inline renderer for headings,
       bold/italic, lists, fenced code, links). FTS within workspace still
       missing.
