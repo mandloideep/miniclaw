@@ -15,6 +15,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/db"
 	"github.com/mandloideep/miniclaw/internal/scheduler"
 	"github.com/mandloideep/miniclaw/internal/services/account"
+	"github.com/mandloideep/miniclaw/internal/services/attachments"
 	"github.com/mandloideep/miniclaw/internal/services/categories"
 	"github.com/mandloideep/miniclaw/internal/services/digest"
 	"github.com/mandloideep/miniclaw/internal/services/email"
@@ -70,10 +71,12 @@ func run() error {
 	accountSvc := account.New(pool)
 	triageSvc := triage.New(pool)
 	catEngine := categories.New(pool)
+	attachSvc := attachments.New(pool)
 	imapSyncer := email.NewIMAPSyncer(pool, accountSvc, triageSvc, func(from, unsub string) string {
 		return string(categories.Classify(from, unsub))
 	})
 	gmailSync := gmailoauth.NewSyncer(pool, accountSvc)
+	gmailSync.AttachInlineStore(attachSvc)
 	gmailAuth := gmailoauth.New()
 	msSync := msoauth.NewSyncer(pool, accountSvc)
 	msAuth := msoauth.New()
@@ -104,6 +107,7 @@ func run() error {
 			application.NewService(msAuth),
 			application.NewService(msSync),
 			application.NewService(inbox.New(pool)),
+			application.NewService(attachSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

@@ -15,15 +15,31 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/account"
 )
 
+// AttachmentStore is the optional sink for inline images we extract from
+// Gmail multipart bodies. Implemented by *attachments.Service. nil-safe
+// inside the syncer for tests that don't care about attachments.
+type AttachmentStore interface {
+	Store(ctx context.Context, emailID int64, contentID, filename, mime string, isInline bool, data []byte) error
+}
+
 // Syncer ingests one Gmail-OAuth account at a time using the REST API.
 type Syncer struct {
-	q        *sqlcgen.Queries
-	accounts *account.Service
+	q           *sqlcgen.Queries
+	accounts    *account.Service
+	attachments AttachmentStore
 }
 
 // NewSyncer wires the syncer to the shared pool and account service.
 func NewSyncer(pool *sql.DB, acc *account.Service) *Syncer {
 	return &Syncer{q: sqlcgen.New(pool), accounts: acc}
+}
+
+// AttachInlineStore wires an attachments sink in place. Returning a
+// concrete *Syncer from a method would make the Wails binding generator
+// expose Syncer as both a service and a model, which collides — so this
+// mutates and returns nothing.
+func (s *Syncer) AttachInlineStore(store AttachmentStore) {
+	s.attachments = store
 }
 
 // Sync pulls messages from the user's INBOX newer than the account's
@@ -81,6 +97,7 @@ func (s *Syncer) Sync(ctx context.Context, accountID int64) (int, error) {
 					Category: msg.Category, ID: id2,
 				})
 			}
+			s.persistAttachments(ctx, client, msg.GmailID, id2, msg.Attachments)
 			written++
 		}
 	}
@@ -230,10 +247,38 @@ func (s *Syncer) BackfillBefore(ctx context.Context, accountID int64, before str
 					Category: msg.Category, ID: id2,
 				})
 			}
+			s.persistAttachments(ctx, client, msg.GmailID, id2, msg.Attachments)
 			written++
 		}
 	}
 	return written, nil
+}
+
+// persistAttachments stores each inline/file attachment for the given
+// email. Hydrates body data via attachments.get when the part was big
+// enough that Gmail deferred it. nil-safe when no attachment store is
+// wired in (e.g. unit tests).
+func (s *Syncer) persistAttachments(ctx context.Context, client *http.Client, gmailMsgID string, emailID int64, atts []gmailAttachment) {
+	if s.attachments == nil {
+		return
+	}
+	for _, a := range atts {
+		if ctx.Err() != nil {
+			return
+		}
+		data := a.Data
+		if len(data) == 0 && a.AttachmentID != "" {
+			hydrated, err := fetchAttachmentData(ctx, client, gmailMsgID, a.AttachmentID)
+			if err != nil || len(hydrated) == 0 {
+				continue
+			}
+			data = hydrated
+		}
+		if len(data) == 0 {
+			continue
+		}
+		_ = s.attachments.Store(ctx, emailID, a.ContentID, a.Filename, a.MIME, a.Inline, data)
+	}
 }
 
 // SyncNow is a thin wrapper exposed to the frontend so the UI can trigger
@@ -257,6 +302,7 @@ func parseFlexDate(v string) (time.Time, error) {
 // gmailMessage is what fetchMessage returns once the REST payload is parsed.
 type gmailMessage struct {
 	MessageID   string
+	GmailID     string // server-side id, used for attachments.get
 	FromAddress string
 	FromName    string
 	To, Cc      string
@@ -266,6 +312,7 @@ type gmailMessage struct {
 	BodyHTML    string
 	HeadersJSON string
 	Category    string // mapped from Gmail labelIds; empty if not categorisable
+	Attachments []gmailAttachment
 }
 
 func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMessage, error) {
@@ -303,12 +350,14 @@ func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMes
 		hdrs[h.Name] = h.Value
 	}
 	out := gmailMessage{
-		MessageID:  hdrs["Message-ID"],
-		Subject:    hdrs["Subject"],
-		ReceivedAt: internalDateToRFC3339(body.InternalDate),
-		BodyPlain:  walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/plain"),
-		BodyHTML:   walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/html"),
-		Category:   categoryFromLabels(body.LabelIds),
+		MessageID:   hdrs["Message-ID"],
+		GmailID:     body.ID,
+		Subject:     hdrs["Subject"],
+		ReceivedAt:  internalDateToRFC3339(body.InternalDate),
+		BodyPlain:   walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/plain"),
+		BodyHTML:    walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/html"),
+		Category:    categoryFromLabels(body.LabelIds),
+		Attachments: collectAttachments(body.Payload.Parts),
 	}
 	if out.MessageID == "" {
 		out.MessageID = body.ID // fallback so dedupe still works
@@ -326,8 +375,15 @@ func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMes
 
 type part struct {
 	MimeType string `json:"mimeType"`
-	Body     struct {
-		Data string `json:"data"`
+	Filename string `json:"filename"`
+	Headers  []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"headers"`
+	Body struct {
+		Data         string `json:"data"`
+		AttachmentID string `json:"attachmentId"`
+		Size         int64  `json:"size"`
 	} `json:"body"`
 	Parts []part `json:"parts"`
 }
@@ -349,6 +405,112 @@ func walkParts(parts []part, rootMime, rootData, want string) string {
 		}
 	}
 	return ""
+}
+
+// gmailAttachment is one inline-image or file attachment ready to persist.
+type gmailAttachment struct {
+	ContentID    string
+	Filename     string
+	MIME         string
+	Inline       bool
+	Data         []byte
+	AttachmentID string // set when Gmail deferred the body — hydrate via attachments.get
+}
+
+// collectAttachments walks the part tree and returns every part that
+// has a Content-ID header (inline image) or a non-empty filename
+// (regular attachment). Body data may still be empty when Gmail decided
+// the part was big enough to require a follow-up attachments.get fetch;
+// callers should hydrate those via fetchAttachmentData.
+func collectAttachments(parts []part) []gmailAttachment {
+	var out []gmailAttachment
+	var walk func([]part)
+	walk = func(ps []part) {
+		for _, p := range ps {
+			if hasAttachment(p) {
+				out = append(out, gmailAttachment{
+					ContentID:    partHeader(p, "Content-ID"),
+					Filename:     p.Filename,
+					MIME:         p.MimeType,
+					Inline:       isInlinePart(p),
+					Data:         decodeURL(p.Body.Data),
+					AttachmentID: p.Body.AttachmentID,
+				})
+			}
+			if len(p.Parts) > 0 {
+				walk(p.Parts)
+			}
+		}
+	}
+	walk(parts)
+	return out
+}
+
+func hasAttachment(p part) bool {
+	if p.Filename != "" {
+		return true
+	}
+	if partHeader(p, "Content-ID") != "" {
+		return true
+	}
+	if strings.HasPrefix(p.MimeType, "image/") && p.Body.AttachmentID != "" {
+		return true
+	}
+	return false
+}
+
+func isInlinePart(p part) bool {
+	if partHeader(p, "Content-ID") != "" {
+		return true
+	}
+	cd := strings.ToLower(partHeader(p, "Content-Disposition"))
+	return strings.HasPrefix(cd, "inline")
+}
+
+func partHeader(p part, name string) string {
+	for _, h := range p.Headers {
+		if strings.EqualFold(h.Name, name) {
+			return h.Value
+		}
+	}
+	return ""
+}
+
+func decodeURL(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	b, err := base64.URLEncoding.DecodeString(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// fetchAttachmentData hydrates a part whose body was deferred. Gmail's
+// REST API returns bodies inline for small parts; large ones (typically
+// >~5MB) come back as just an attachmentId reference.
+func fetchAttachmentData(ctx context.Context, client *http.Client, msgID, attachmentID string) ([]byte, error) {
+	u := fmt.Sprintf(
+		"https://gmail.googleapis.com/gmail/v1/users/me/messages/%s/attachments/%s",
+		url.PathEscape(msgID), url.PathEscape(attachmentID),
+	)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("attachments.get: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("attachments.get: %s", resp.Status)
+	}
+	var body struct {
+		Data string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return decodeURL(body.Data), nil
 }
 
 func internalDateToRFC3339(ms string) string {

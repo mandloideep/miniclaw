@@ -11,7 +11,7 @@ import {
   Send,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { GmailOAuth, IMAPSync, Inbox as InboxApi, SMTPSender, Triage } from "../api";
+import { Attachments, GmailOAuth, IMAPSync, Inbox as InboxApi, SMTPSender, Triage } from "../api";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -338,7 +338,35 @@ function EmailReader({ detail, onPutAside }) {
 
 function HtmlBody({ detail, loadRemoteImages }) {
   const ref = useRef(null);
-  const srcDoc = useMemo(() => buildSrcDoc(detail, loadRemoteImages), [detail, loadRemoteImages]);
+  const [cidMap, setCidMap] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!detail?.id) {
+      setCidMap({});
+      return;
+    }
+    Attachments.GetInline(detail.id)
+      .then((rows) => {
+        if (cancelled) return;
+        const next = {};
+        for (const r of rows ?? []) {
+          if (r?.contentId) next[r.contentId.toLowerCase()] = r.dataUrl;
+        }
+        setCidMap(next);
+      })
+      .catch(() => {
+        if (!cancelled) setCidMap({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.id]);
+
+  const srcDoc = useMemo(
+    () => buildSrcDoc(detail, loadRemoteImages, cidMap),
+    [detail, loadRemoteImages, cidMap],
+  );
 
   const onLoad = useCallback(() => {
     const iframe = ref.current;
@@ -374,25 +402,28 @@ function HtmlBody({ detail, loadRemoteImages }) {
   );
 }
 
-// buildSrcDoc takes the raw HTML, strips <script>, optionally rewrites <img>
-// sources to about:blank to suppress remote tracking pixels, and wraps the
-// result with a sane base + body style.
-function buildSrcDoc(detail, loadRemoteImages) {
+// buildSrcDoc strips scripts, splices inline-image data URLs into cid:
+// references, and (optionally) blocks remote images. Anything we couldn't
+// match in cidMap gets a small placeholder so the layout doesn't
+// collapse and the user knows there's a missing image.
+function buildSrcDoc(detail, loadRemoteImages, cidMap = {}) {
   let html = detail.bodyHtml || "";
   html = html.replace(/<script[\s\S]*?<\/script>/gi, "");
   html = html.replace(/\son\w+\s*=\s*"[^"]*"/gi, "");
   html = html.replace(/\son\w+\s*=\s*'[^']*'/gi, "");
   html = html.replace(/javascript:/gi, "blocked:");
-  if (!loadRemoteImages) {
-    html = html.replace(/<img\b([^>]*?)\bsrc\s*=\s*["']([^"']*)["']/gi, (_m, rest, src) => {
-      if (/^cid:/i.test(src)) return `<img${rest} data-cid="${src}" alt="(inline image)"`;
+  html = html.replace(/<img\b([^>]*?)\bsrc\s*=\s*["']([^"']*)["']/gi, (_m, rest, src) => {
+    if (/^cid:/i.test(src)) {
+      const cid = src.replace(/^cid:/i, "").toLowerCase();
+      const dataUrl = cidMap[cid];
+      if (dataUrl) return `<img${rest} src="${dataUrl}"`;
+      return `<img${rest} alt="(missing inline image)" style="display:inline-block;min-width:24px;min-height:24px;background:#f3f4f6;border:1px dashed #d1d5db"`;
+    }
+    if (!loadRemoteImages) {
       return `<img${rest} data-blocked-src="${src}" alt="(remote image)" style="display:inline-block;min-width:24px;min-height:24px;background:#e5e7eb;border:1px dashed #cbd5e1"`;
-    });
-  } else {
-    html = html.replace(/<img\b([^>]*?)\bsrc\s*=\s*["']cid:([^"']*)["']/gi, (_m, rest) => {
-      return `<img${rest} alt="(inline image — not stored)"`;
-    });
-  }
+    }
+    return `<img${rest} src="${src}"`;
+  });
   return `<!doctype html>
 <html><head><base target="_blank">
 <style>

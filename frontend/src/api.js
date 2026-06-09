@@ -2,6 +2,7 @@
 // Centralising here keeps generated import paths out of every component.
 
 import { Service as Accounts } from "../bindings/github.com/mandloideep/miniclaw/internal/services/account";
+import { Service as Attachments } from "../bindings/github.com/mandloideep/miniclaw/internal/services/attachments";
 import { Service as Digest } from "../bindings/github.com/mandloideep/miniclaw/internal/services/digest";
 import {
   IMAPSyncer as IMAPSync,
@@ -29,6 +30,7 @@ const MSOAuth = { ...MSAuth, ...MSSync };
 
 export {
   Accounts,
+  Attachments,
   Digest,
   GmailOAuth,
   IMAPSync,
