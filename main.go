@@ -19,6 +19,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/greet"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
+	"github.com/mandloideep/miniclaw/internal/services/summary"
 	"github.com/mandloideep/miniclaw/internal/services/workspace"
 )
 
@@ -50,6 +51,8 @@ func run() error {
 	accountSvc := account.New(pool)
 	imapSyncer := email.NewIMAPSyncer(pool, accountSvc)
 	smtpSender := email.NewSMTPSender(accountSvc)
+	llm := ollama.New()
+	summarizer := summary.New(pool, llm)
 	app := application.New(application.Options{
 		Name:        "miniclaw",
 		Description: "Local-AI email triage with Telegram digests",
@@ -58,9 +61,10 @@ func run() error {
 			application.NewService(keychain.New()),
 			application.NewService(workspace.New(pool)),
 			application.NewService(accountSvc),
-			application.NewService(ollama.New()),
+			application.NewService(llm),
 			application.NewService(imapSyncer),
 			application.NewService(smtpSender),
+			application.NewService(summarizer),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -86,8 +90,14 @@ func run() error {
 	schedCtx, cancelSched := context.WithCancel(ctx)
 	defer cancelSched()
 	sched := scheduler.New(accountSvc, func(c context.Context, accountID int64) error {
-		_, syncErr := imapSyncer.Sync(c, accountID)
-		return syncErr
+		if _, syncErr := imapSyncer.Sync(c, accountID); syncErr != nil {
+			return syncErr
+		}
+		// Best-effort summarisation — a bad model config shouldn't stop
+		// the ingest loop, so we log and swallow inside Summarize. Returning
+		// nil here keeps the scheduler from spamming the log twice.
+		_, _ = summarizer.Summarize(c, accountID)
+		return nil
 	})
 	go sched.Start(schedCtx)
 

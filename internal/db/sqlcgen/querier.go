@@ -15,12 +15,15 @@ type Querier interface {
 	DeleteAccount(ctx context.Context, id int64) error
 	DeleteWorkspace(ctx context.Context, id int64) error
 	GetAccount(ctx context.Context, id int64) (Account, error)
+	GetAccountModel(ctx context.Context, id int64) (GetAccountModelRow, error)
+	GetSummaryForEmail(ctx context.Context, emailID int64) (Summary, error)
 	GetWorkspace(ctx context.Context, id int64) (Workspace, error)
 	ListAccounts(ctx context.Context) ([]Account, error)
 	ListAccountsByWorkspace(ctx context.Context, workspaceID int64) ([]Account, error)
 	ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccountParams) ([]ListEmailsByAccountRow, error)
 	ListEmailsByWorkspace(ctx context.Context, arg ListEmailsByWorkspaceParams) ([]ListEmailsByWorkspaceRow, error)
 	ListNeedsAttentionSince(ctx context.Context, generatedAt string) ([]ListNeedsAttentionSinceRow, error)
+	ListUnsummarizedByAccount(ctx context.Context, arg ListUnsummarizedByAccountParams) ([]ListUnsummarizedByAccountRow, error)
 	ListWorkspaces(ctx context.Context) ([]Workspace, error)
 	MarkEmailRead(ctx context.Context, id int64) error
 	MarkEmailUnread(ctx context.Context, id int64) error
@@ -34,6 +37,7 @@ type Querier interface {
 	UpdateAccountSync(ctx context.Context, id int64) error
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) error
 	UpsertEmail(ctx context.Context, arg UpsertEmailParams) (int64, error)
+	UpsertSummary(ctx context.Context, arg UpsertSummaryParams) error
 }
 
 var _ Querier = (*Queries)(nil)
