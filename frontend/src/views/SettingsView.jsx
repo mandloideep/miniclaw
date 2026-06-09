@@ -257,11 +257,17 @@ function AccountRow({ account, workspace, models, onChange }) {
                 className="mt-1 w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
               >
                 <option value="">(workspace default)</option>
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
+                {(models || []).map((m) => {
+                  // Ollama.ListModels returns Model objects; the old code
+                  // assumed a list of strings, which crashed the row open.
+                  const name = typeof m === "string" ? m : m?.name;
+                  if (!name) return null;
+                  return (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>
