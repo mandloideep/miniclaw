@@ -69,7 +69,9 @@ export default function App() {
     refreshAccounts();
     Ollama.Status().then(setOllamaStatus);
     Keychain.Available().then(setKeychainOk);
-    const t = setInterval(() => Ollama.Status().then(setOllamaStatus), 30000);
+    // 60s — the status pill only changes when Ollama is restarted; a busier
+    // poll just adds noise to the Ollama server log.
+    const t = setInterval(() => Ollama.Status().then(setOllamaStatus), 60000);
     return () => clearInterval(t);
   }, [refreshWorkspaces, refreshAccounts]);
 

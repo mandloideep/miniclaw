@@ -58,11 +58,24 @@ export default function SettingsView({
   onWorkspacesChanged,
   onAccountsChanged,
 }) {
+  // Single Ollama.ListModels fetch, shared by AccountsSection and
+  // OllamaSection so opening Settings doesn't fan out to two /api/tags hits.
+  const [models, setModels] = useState([]);
+  useEffect(() => {
+    Ollama.ListModels()
+      .then((rows) => setModels(rows || []))
+      .catch(() => setModels([]));
+  }, []);
   return (
     <div className="max-w-3xl space-y-8">
       <WorkspacesSection workspaces={workspaces} onChange={onWorkspacesChanged} />
-      <AccountsSection workspaces={workspaces} accounts={accounts} onChange={onAccountsChanged} />
-      <OllamaSection status={ollamaStatus} />
+      <AccountsSection
+        workspaces={workspaces}
+        accounts={accounts}
+        models={models}
+        onChange={onAccountsChanged}
+      />
+      <OllamaSection status={ollamaStatus} models={models} />
       <TelegramSection accounts={accounts} workspaces={workspaces} />
     </div>
   );
@@ -297,14 +310,8 @@ function AccountRow({ account, workspace, models, onChange }) {
   );
 }
 
-function AccountsSection({ workspaces, accounts, onChange }) {
+function AccountsSection({ workspaces, accounts, models, onChange }) {
   const [showAdd, setShowAdd] = useState(false);
-  const [models, setModels] = useState([]);
-  useEffect(() => {
-    Ollama.ListModels()
-      .then(setModels)
-      .catch(() => setModels([]));
-  }, []);
   return (
     <Section title="Accounts">
       <ul className="space-y-1.5 mb-3">
@@ -524,13 +531,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
   );
 }
 
-function OllamaSection({ status }) {
-  const [models, setModels] = useState([]);
-  useEffect(() => {
-    Ollama.ListModels()
-      .then(setModels)
-      .catch(() => setModels([]));
-  }, []);
+function OllamaSection({ status, models }) {
   return (
     <Section title="Ollama">
       {!status?.running ? (

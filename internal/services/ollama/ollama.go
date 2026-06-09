@@ -81,9 +81,11 @@ func NewWithURL(baseURL string) *Service {
 	}
 }
 
-// Status hits /api/version + /api/ps. Returns Running=false (with Error
-// populated) if the server is down — non-fatal, the frontend uses it for
-// the status banner.
+// Status hits /api/version only. The frontend never surfaces loaded-model
+// state, so the previous /api/ps follow-up was dead traffic; the field
+// stays in the struct so older bindings keep compiling but we no longer
+// populate it. LoadedModelsLive exists for callers that explicitly want
+// the live list.
 func (s *Service) Status(ctx context.Context) Status {
 	resp, err := s.do(ctx, s.short, http.MethodGet, "/api/version", nil)
 	if err != nil {
@@ -98,11 +100,16 @@ func (s *Service) Status(ctx context.Context) Status {
 		return Status{Running: false, Error: fmt.Sprintf("decode version: %v", err)}
 	}
 	return Status{
-		Running:      true,
-		Version:      body.Version,
-		LastError:    s.LastError(),
-		LoadedModels: s.loadedModels(ctx),
+		Running:   true,
+		Version:   body.Version,
+		LastError: s.LastError(),
 	}
+}
+
+// LoadedModelsLive exposes the /api/ps poll as its own method so the
+// previous Status() pass can stay lean. Returns nil on any error.
+func (s *Service) LoadedModelsLive(ctx context.Context) []string {
+	return s.loadedModels(ctx)
 }
 
 // loadedModels hits /api/ps. Best-effort; returns nil on any error so a
