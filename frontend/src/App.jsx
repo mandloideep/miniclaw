@@ -1,6 +1,6 @@
 import { Events, WML } from "@wailsio/runtime";
 import { useEffect, useState } from "react";
-import { GreetService } from "../bindings/github.com/mandloideep/miniclaw";
+import { Service as GreetService } from "../bindings/github.com/mandloideep/miniclaw/internal/services/greet";
 
 function App() {
   const [name, setName] = useState("");
