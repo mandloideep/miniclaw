@@ -18,6 +18,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/categories"
 	"github.com/mandloideep/miniclaw/internal/services/digest"
 	"github.com/mandloideep/miniclaw/internal/services/email"
+	"github.com/mandloideep/miniclaw/internal/services/gmailoauth"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
@@ -58,6 +59,8 @@ func run() error {
 	imapSyncer := email.NewIMAPSyncer(pool, accountSvc, triageSvc, func(from, unsub string) string {
 		return string(categories.Classify(from, unsub))
 	})
+	gmailSync := gmailoauth.NewSyncer(pool, accountSvc)
+	gmailAuth := gmailoauth.New()
 	smtpSender := email.NewSMTPSender(accountSvc)
 	llm := ollama.New()
 	summarizer := summary.New(pool, llm)
@@ -80,6 +83,8 @@ func run() error {
 			application.NewService(digestSvc),
 			application.NewService(triageSvc),
 			application.NewService(catEngine),
+			application.NewService(gmailAuth),
+			application.NewService(gmailSync),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -105,12 +110,23 @@ func run() error {
 	schedCtx, cancelSched := context.WithCancel(ctx)
 	defer cancelSched()
 	sched := scheduler.New(accountSvc, func(c context.Context, accountID int64) error {
-		if _, syncErr := imapSyncer.Sync(c, accountID); syncErr != nil {
-			return syncErr
+		// Pick ingest path by auth kind. Errors here are real (transport,
+		// auth) and worth surfacing in the log; summary failures are
+		// swallowed inside Summarize.
+		acc, err := accountSvc.Get(c, accountID)
+		if err != nil {
+			return err
 		}
-		// Best-effort summarisation — a bad model config shouldn't stop
-		// the ingest loop, so we log and swallow inside Summarize. Returning
-		// nil here keeps the scheduler from spamming the log twice.
+		switch acc.AuthKind {
+		case account.AuthIMAP:
+			if _, e := imapSyncer.Sync(c, accountID); e != nil {
+				return e
+			}
+		case account.AuthGmailOAuth:
+			if _, e := gmailSync.Sync(c, accountID); e != nil {
+				return e
+			}
+		}
 		_, _ = summarizer.Summarize(c, accountID)
 		return nil
 	})

@@ -137,6 +137,48 @@ func (s *Service) AddIMAP(ctx context.Context, c IMAPCreds) (Account, error) {
 	return toAccount(r), nil
 }
 
+// OAuthCreds is what the onboarding hands over after a successful Gmail
+// OAuth consent flow.
+type OAuthCreds struct {
+	WorkspaceID  int64  `json:"workspaceId"`
+	DisplayName  string `json:"displayName"`
+	EmailAddress string `json:"emailAddress"`
+	RefreshToken string `json:"refreshToken"`
+	FetchSince   string `json:"fetchSince,omitempty"`
+	OllamaModel  string `json:"ollamaModel,omitempty"`
+}
+
+// AddGmailOAuth persists a Gmail-OAuth account. The refresh token goes to
+// the keychain under ref "gmail_oauth:<email>" and only the ref hits the DB.
+func (s *Service) AddGmailOAuth(ctx context.Context, c OAuthCreds) (Account, error) {
+	switch {
+	case c.WorkspaceID == 0:
+		return Account{}, errors.New("workspace is required")
+	case c.EmailAddress == "":
+		return Account{}, errors.New("email address is required")
+	case c.RefreshToken == "":
+		return Account{}, errors.New("refresh token is required")
+	}
+	ref := secretRef(AuthGmailOAuth, c.EmailAddress)
+	if err := keychain.Set(ref, c.RefreshToken); err != nil {
+		return Account{}, fmt.Errorf("store refresh token: %w", err)
+	}
+	r, err := s.q.CreateOAuthAccount(ctx, sqlcgen.CreateOAuthAccountParams{
+		WorkspaceID:     c.WorkspaceID,
+		DisplayName:     c.DisplayName,
+		EmailAddress:    c.EmailAddress,
+		SecretRef:       ref,
+		FetchSince:      sql.NullString{String: c.FetchSince, Valid: c.FetchSince != ""},
+		SyncCadenceSecs: 300,
+		OllamaModel:     c.OllamaModel,
+	})
+	if err != nil {
+		_ = keychain.Delete(ref)
+		return Account{}, fmt.Errorf("create account: %w", err)
+	}
+	return toAccount(r), nil
+}
+
 // Delete removes the account row and its associated keychain secret.
 func (s *Service) Delete(ctx context.Context, id int64) error {
 	row, err := s.q.GetAccount(ctx, id)
