@@ -1,6 +1,55 @@
+# build outputs
 .task
 bin
+dist
 frontend/dist
-frontend/node_modules
+frontend/bindings
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+
+# dependencies
+node_modules
+
+# env + secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# local data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+data/
+ollama-data/
+
+# logs + coverage
+*.log
+coverage.out
+coverage.html
+*.cover
+*.test
+*.prof
+
+# tool caches
+.fallow/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
