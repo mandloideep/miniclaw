@@ -240,9 +240,7 @@ function TodosPane({ workspace }) {
               aria-label="Toggle done"
             />
             <span
-              className={
-                "flex-1 text-[13px] " + (t.done ? "line-through text-ink-tertiary" : "text-ink")
-              }
+              className={`flex-1 text-[13px] ${t.done ? "line-through text-ink-tertiary" : "text-ink"}`}
             >
               {t.text}
             </span>
@@ -380,16 +378,34 @@ function NotesPane({ workspace }) {
             else setDraft({ ...draft, title: e.target.value });
           }}
         />
-        <Textarea
-          rows={14}
-          placeholder="Write in markdown…"
-          value={active ? active.bodyMd : draft.bodyMd}
-          onChange={(e) => {
-            if (active) setActive({ ...active, bodyMd: e.target.value });
-            else setDraft({ ...draft, bodyMd: e.target.value });
-          }}
-          className="font-mono text-[13px]"
-        />
+        <Tabs defaultValue="edit" className="w-full">
+          <TabsList>
+            <TabsTrigger value="edit">Write</TabsTrigger>
+            <TabsTrigger value="preview">Preview</TabsTrigger>
+          </TabsList>
+          <TabsContent value="edit">
+            <Textarea
+              rows={14}
+              placeholder="Write in markdown…"
+              value={active ? active.bodyMd : draft.bodyMd}
+              onChange={(e) => {
+                if (active) setActive({ ...active, bodyMd: e.target.value });
+                else setDraft({ ...draft, bodyMd: e.target.value });
+              }}
+              className="font-mono text-[13px]"
+            />
+          </TabsContent>
+          <TabsContent value="preview">
+            <div
+              className="min-h-[280px] px-3 py-2 border border-hairline rounded-md bg-surface-1 text-[13px] note-preview"
+              // The renderer escapes HTML before inserting tags, so this is safe.
+              // biome-ignore lint/security/noDangerouslySetInnerHtml: rendered from sanitised markdown
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdown(active ? active.bodyMd : draft.bodyMd),
+              }}
+            />
+          </TabsContent>
+        </Tabs>
         <div className="flex gap-2">
           <Button onClick={save} size="sm">
             Save
@@ -413,6 +429,74 @@ function NotesPane({ workspace }) {
       </div>
     </div>
   );
+}
+
+// renderMarkdown is a deliberately small subset renderer — headings, bold,
+// italic, inline code, fenced code, bullet lists, paragraphs. Anything more
+// involved should pull in a real library, but for personal notes this covers
+// the 90% case without a dep.
+function renderMarkdown(src) {
+  if (!src) return '<p class="text-ink-tertiary italic">Nothing yet.</p>';
+  const esc = (s) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  // Pull fenced code blocks out first so their content doesn't get
+  // mis-handled by line-level rules.
+  const blocks = [];
+  let body = src.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+    const idx = blocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`) - 1;
+    return `@@MDBLOCK${idx}@@`;
+  });
+  body = esc(body);
+
+  const lines = body.split("\n");
+  const out = [];
+  let inList = false;
+  const flushList = () => {
+    if (inList) {
+      out.push("</ul>");
+      inList = false;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    if (h) {
+      flushList();
+      const level = h[1].length;
+      out.push(`<h${level}>${inlineMd(h[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${inlineMd(bullet[1])}</li>`);
+      continue;
+    }
+    if (line.trim() === "") {
+      flushList();
+      out.push("");
+      continue;
+    }
+    flushList();
+    out.push(`<p>${inlineMd(line)}</p>`);
+  }
+  flushList();
+
+  let html = out.join("\n");
+  html = html.replace(/@@MDBLOCK(\d+)@@/g, (_m, i) => blocks[Number(i)]);
+  return html;
+}
+
+function inlineMd(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 }
 
 function formatRange(startISO, endISO) {
