@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/mandloideep/miniclaw/internal/db"
+	"github.com/mandloideep/miniclaw/internal/scheduler"
 	"github.com/mandloideep/miniclaw/internal/services/account"
 	"github.com/mandloideep/miniclaw/internal/services/email"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
@@ -47,6 +48,8 @@ func run() error {
 	defer func() { _ = pool.Close() }()
 
 	accountSvc := account.New(pool)
+	imapSyncer := email.NewIMAPSyncer(pool, accountSvc)
+	smtpSender := email.NewSMTPSender(accountSvc)
 	app := application.New(application.Options{
 		Name:        "miniclaw",
 		Description: "Local-AI email triage with Telegram digests",
@@ -56,8 +59,8 @@ func run() error {
 			application.NewService(workspace.New(pool)),
 			application.NewService(accountSvc),
 			application.NewService(ollama.New()),
-			application.NewService(email.NewIMAPSyncer(pool, accountSvc)),
-			application.NewService(email.NewSMTPSender(accountSvc)),
+			application.NewService(imapSyncer),
+			application.NewService(smtpSender),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -77,6 +80,16 @@ func run() error {
 		BackgroundColour: application.NewRGB(27, 38, 54),
 		URL:              "/",
 	})
+
+	// Start per-account ingest scheduler. Its context is cancelled when the
+	// app exits Run, draining all per-account goroutines.
+	schedCtx, cancelSched := context.WithCancel(ctx)
+	defer cancelSched()
+	sched := scheduler.New(accountSvc, func(c context.Context, accountID int64) error {
+		_, syncErr := imapSyncer.Sync(c, accountID)
+		return syncErr
+	})
+	go sched.Start(schedCtx)
 
 	go emitClockTick(app)
 	return app.Run()
