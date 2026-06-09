@@ -28,15 +28,14 @@ func init() {
 // and starts a goroutine that emits a time-based event every second. It subsequently runs the application and
 // logs any error that might occur.
 func main() {
-
 	// Create a new Wails application by providing the necessary options.
 	// Variables 'Name' and 'Description' are for application metadata.
 	// 'Assets' configures the asset server with the 'FS' variable pointing to the frontend files.
 	// 'Bind' is a list of Go struct instances. The frontend has access to the methods of these instances.
 	// 'Mac' options tailor the application when running an macOS.
 	app := application.New(application.Options{
-		Name:        ".",
-		Description: "A demo of using raw HTML & CSS",
+		Name:        "miniclaw",
+		Description: "Local-AI email triage with Telegram digests",
 		Services: []application.Service{
 			application.NewService(&GreetService{}),
 		},

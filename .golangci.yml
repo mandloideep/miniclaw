@@ -39,6 +39,10 @@ linters:
       checks:
         - all
   exclusions:
+    # Wails-scaffolded helper code under build/ (iOS/Android dep installers,
+    # platform-specific app_options stubs) is generated and not ours to lint.
+    paths:
+      - build
     rules:
       - path: _test\.go
         linters:

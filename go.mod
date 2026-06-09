@@ -1,4 +1,4 @@
-module changeme
+module github.com/mandloideep/miniclaw
 
 go 1.25.0
 
