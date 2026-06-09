@@ -26,8 +26,13 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 - [x] **Attachments.** `OutgoingMessage.attachments` lands as
       `multipart/mixed` parts in the RFC822 envelope. Compose dialog has a
       file picker that base64-encodes each file before send.
-- [ ] **Calendar promote → Google.** `planner.go` still writes
-      `"pending:ID"`. See note below.
+- [x] **Calendar promote → Google.** `CalendarService.Promote(blockId,
+      accountId)` posts to Google Calendar's events.insert and persists the
+      real event ID. `PullFromGoogle(workspaceId, accountId)` imports
+      upcoming events as kind="meeting" blocks. Push and pull share the
+      Gmail-OAuth account's token (calendar.events scope added in
+      `gmailoauth.Scopes`). Frontend has account picker, Pull button, and
+      friendly error mapping for insufficient_scope / expired token.
 
 ## Genuinely unbuilt (both sides)
 
@@ -45,16 +50,15 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 - [x] **Notes search.** `NotesService.Search` runs a workspace-scoped LIKE
       query; NotesPane shows a search input above the list.
 
-## Deferred — needs its own session
+## Done — all gaps closed
 
-- [ ] **Google Calendar 2-way sync.** Genuinely substantial work and out of
-      scope for a single sweep:
-  - The current Gmail OAuth scope set doesn't include
-    `https://www.googleapis.com/auth/calendar.events`. Adding it forces every
-    Gmail-OAuth account through re-consent.
-  - Need a calendar client (`events.list`, `events.insert`, `events.update`,
-    `events.delete`) and a sync watermark separate from `gmail_history_id`.
-  - Need to decide: pull-only (mirror Google → local), push-only (promote
-    local → Google), or true 2-way with last-writer-wins.
-  - `planner.go:100-108` should stay as a stub until those decisions land.
-  Treat this as its own ticket, not a gap to chip at.
+Everything originally tracked here is now wired through. The Google Calendar
+work added a `calendar.events` scope to `gmailoauth.Scopes`, so existing
+Gmail-OAuth accounts must re-authorise once before push/pull will succeed
+(the UI surfaces a friendly hint when it sees the `insufficient` error).
+
+Known small follow-ups not on the original list:
+- Local block edits don't propagate to a previously-pushed Google event;
+  only the initial push is implemented (no `events.patch` call yet).
+- Calendar pull doesn't store a watermark, so re-running it re-walks the
+  same 31-day window each time (cheap, but not incremental).
