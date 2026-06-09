@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   MailOpen,
   PauseCircle,
+  PencilLine,
   PlayCircle,
   RefreshCw,
   Search as SearchIcon,
@@ -44,6 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Separator } from "../components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
@@ -61,6 +63,7 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
   const [selectedId, setSelectedId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [composeOpen, setComposeOpen] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
@@ -182,7 +185,17 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
         <div className="h-14 px-4 flex items-center gap-2 border-b border-hairline">
           <h2 className="display text-sm font-medium tracking-[-0.01em]">{workspace.name}</h2>
           <Badge variant="muted">{emails.length}</Badge>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => setComposeOpen(true)}
+              aria-label="Compose new mail"
+              disabled={accounts.length === 0}
+              title="Compose new mail"
+            >
+              <PencilLine className="w-3 h-3" />
+            </Button>
             <Button size="xs" variant="ghost" onClick={refresh} aria-label="Refresh list">
               <RefreshCw className="w-3 h-3" />
             </Button>
@@ -283,8 +296,156 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
           }}
         />
       </section>
+      <ComposeDialog open={composeOpen} accounts={accounts} onClose={() => setComposeOpen(false)} />
     </div>
   );
+}
+
+function ComposeDialog({ open, accounts, onClose }) {
+  const [accountId, setAccountId] = useState(0);
+  const [to, setTo] = useState("");
+  const [cc, setCc] = useState("");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  // Pick the first account once we have one. The user can override.
+  useEffect(() => {
+    if (open && !accountId && accounts.length > 0) {
+      setAccountId(accounts[0].id);
+    }
+  }, [open, accountId, accounts]);
+
+  const reset = () => {
+    setTo("");
+    setCc("");
+    setSubject("");
+    setBody("");
+    setErr("");
+  };
+
+  const send = async () => {
+    if (!accountId || !to.trim() || !subject.trim()) {
+      setErr("Need a from-account, at least one recipient, and a subject.");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await SMTPSender.Send(accountId, {
+        to: splitAddresses(to),
+        cc: splitAddresses(cc),
+        subject,
+        body,
+      });
+      reset();
+      onClose();
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onClose();
+      }}
+    >
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>New message</DialogTitle>
+          <DialogDescription>
+            Sends via the chosen account's SMTP host. Comma-separated To/Cc are split.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2.5">
+          <div>
+            <Label htmlFor="compose-from" className="text-xs">
+              From
+            </Label>
+            <select
+              id="compose-from"
+              value={accountId}
+              onChange={(e) => setAccountId(Number(e.target.value))}
+              className="mt-1 w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.emailAddress} ({a.authKind})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label htmlFor="compose-to" className="text-xs">
+                To
+              </Label>
+              <Input
+                id="compose-to"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                placeholder="alice@example.com"
+              />
+            </div>
+            <div>
+              <Label htmlFor="compose-cc" className="text-xs">
+                Cc
+              </Label>
+              <Input id="compose-cc" value={cc} onChange={(e) => setCc(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="compose-subject" className="text-xs">
+              Subject
+            </Label>
+            <Input
+              id="compose-subject"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="compose-body" className="text-xs">
+              Message
+            </Label>
+            <Textarea
+              id="compose-body"
+              rows={10}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              className="font-mono text-[13px]"
+            />
+          </div>
+          {err && <p className="text-[12px] text-danger">{err}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={send} disabled={busy}>
+            {busy ? (
+              <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Send className="w-3.5 h-3.5" />
+            )}
+            {busy ? "Sending…" : "Send"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function splitAddresses(s) {
+  return s
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
 }
 
 // EmailList swaps between a plain mapped list and @tanstack/react-virtual
