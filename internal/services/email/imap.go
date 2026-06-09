@@ -24,21 +24,26 @@ import (
 
 	"github.com/mandloideep/miniclaw/internal/db/sqlcgen"
 	"github.com/mandloideep/miniclaw/internal/services/account"
+	"github.com/mandloideep/miniclaw/internal/services/triage"
 )
 
 // IMAPSyncer ingests one account at a time.
 type IMAPSyncer struct {
 	q        *sqlcgen.Queries
 	accounts *account.Service
+	triage   *triage.Service
 	// dialTLS is overridable for tests.
 	dialTLS func(addr string, opts *imapclient.Options) (*imapclient.Client, error)
 }
 
 // NewIMAPSyncer wires the syncer to the shared DB pool and account service.
-func NewIMAPSyncer(pool *sql.DB, acc *account.Service) *IMAPSyncer {
+// triage may be nil — sync skips filter-rule checks and screener tracking
+// when absent (useful for tests that don't need the full pipeline).
+func NewIMAPSyncer(pool *sql.DB, acc *account.Service, tri *triage.Service) *IMAPSyncer {
 	return &IMAPSyncer{
 		q:        sqlcgen.New(pool),
 		accounts: acc,
+		triage:   tri,
 		dialTLS:  imapclient.DialTLS,
 	}
 }
@@ -143,6 +148,19 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 		from := firstAddress(msg.Envelope.From)
 		to := joinAddresses(msg.Envelope.To)
 		cc := joinAddresses(msg.Envelope.Cc)
+
+		// Filter-rule check — drop blocked senders before they hit the store.
+		if s.triage != nil {
+			blocked, blockErr := s.triage.MatchesBlock(ctx, accountID, from.address)
+			if blockErr == nil && blocked {
+				continue
+			}
+		}
+		// Register sender for the screener; idempotent.
+		if s.triage != nil {
+			_ = s.triage.RegisterSender(ctx, accountID, from.address)
+		}
+
 		_, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
 			AccountID:   accountID,
 			MessageID:   msg.Envelope.MessageID,

@@ -64,6 +64,15 @@ type EmailsFt struct {
 	BodyPlain string
 }
 
+type FilterRule struct {
+	ID        int64
+	AccountID int64
+	Kind      string
+	Pattern   string
+	Reason    string
+	CreatedAt string
+}
+
 type Sender struct {
 	ID            int64
 	AccountID     int64

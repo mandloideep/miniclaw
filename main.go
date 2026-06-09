@@ -22,6 +22,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
 	"github.com/mandloideep/miniclaw/internal/services/summary"
 	"github.com/mandloideep/miniclaw/internal/services/telegram"
+	"github.com/mandloideep/miniclaw/internal/services/triage"
 	"github.com/mandloideep/miniclaw/internal/services/workspace"
 )
 
@@ -51,7 +52,8 @@ func run() error {
 	defer func() { _ = pool.Close() }()
 
 	accountSvc := account.New(pool)
-	imapSyncer := email.NewIMAPSyncer(pool, accountSvc)
+	triageSvc := triage.New(pool)
+	imapSyncer := email.NewIMAPSyncer(pool, accountSvc, triageSvc)
 	smtpSender := email.NewSMTPSender(accountSvc)
 	llm := ollama.New()
 	summarizer := summary.New(pool, llm)
@@ -72,6 +74,7 @@ func run() error {
 			application.NewService(summarizer),
 			application.NewService(tg),
 			application.NewService(digestSvc),
+			application.NewService(triageSvc),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
