@@ -118,29 +118,140 @@ func gmailWatermarkQuery(fetchSince, lastSynced string) string {
 
 // listMessageIDs hits messages.list with the watermark query.
 func listMessageIDs(ctx context.Context, client *http.Client, q string) ([]string, error) {
-	u := "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=" + url.QueryEscape(q) + "&maxResults=200"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	resp, err := client.Do(req)
+	return listMessageIDsPaged(ctx, client, q, 200, 1)
+}
+
+// listMessageIDsPaged walks messages.list with pagination. Returns up to
+// pageSize * maxPages IDs. Stops on first empty page or absent nextPageToken.
+func listMessageIDsPaged(ctx context.Context, client *http.Client, q string, pageSize, maxPages int) ([]string, error) {
+	var (
+		all       []string
+		pageToken string
+	)
+	for range maxPages {
+		u := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=%s&maxResults=%d",
+			url.QueryEscape(q), pageSize)
+		if pageToken != "" {
+			u += "&pageToken=" + url.QueryEscape(pageToken)
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			return all, fmt.Errorf("messages.list: %w", err)
+		}
+		var body struct {
+			Messages []struct {
+				ID string `json:"id"`
+			} `json:"messages"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return all, fmt.Errorf("messages.list: %s", resp.Status)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			_ = resp.Body.Close()
+			return all, err
+		}
+		_ = resp.Body.Close()
+		for _, m := range body.Messages {
+			all = append(all, m.ID)
+		}
+		if body.NextPageToken == "" || len(body.Messages) == 0 {
+			break
+		}
+		pageToken = body.NextPageToken
+	}
+	return all, nil
+}
+
+// BackfillBefore pulls historical messages strictly older than `before`
+// (RFC3339 or YYYY-MM-DD). Used by the UI's "fetch older mail" action so
+// the user can pull a window the watermark sync would never visit.
+// Caps at `maxMessages` (≤ 1000) per call to bound API spend.
+func (s *Syncer) BackfillBefore(ctx context.Context, accountID int64, before string, maxMessages int) (int, error) {
+	if maxMessages <= 0 || maxMessages > 1000 {
+		maxMessages = 200
+	}
+	acc, err := s.accounts.Get(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("messages.list: %w", err)
+		return 0, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("messages.list: %s", resp.Status)
+	if acc.AuthKind != account.AuthGmailOAuth {
+		return 0, fmt.Errorf("account %d is not Gmail OAuth", accountID)
 	}
-	var body struct {
-		Messages []struct {
-			ID string `json:"id"`
-		} `json:"messages"`
+	beforeDate, err := parseFlexDate(before)
+	if err != nil {
+		return 0, fmt.Errorf("before: %w", err)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, err
+	src, err := TokenSource(ctx, secretRefFor(acc.EmailAddress))
+	if err != nil {
+		return 0, err
 	}
-	ids := make([]string, 0, len(body.Messages))
-	for _, m := range body.Messages {
-		ids = append(ids, m.ID)
+	client := oauth2HTTPClient(ctx, src)
+
+	q := fmt.Sprintf("in:inbox before:%s", beforeDate.Format("2006/01/02"))
+	pageSize := 100
+	pages := (maxMessages + pageSize - 1) / pageSize
+	ids, err := listMessageIDsPaged(ctx, client, q, pageSize, pages)
+	if err != nil {
+		return 0, err
 	}
-	return ids, nil
+	if len(ids) > maxMessages {
+		ids = ids[:maxMessages]
+	}
+	written := 0
+	for _, id := range ids {
+		if cerr := ctx.Err(); cerr != nil {
+			return written, cerr
+		}
+		msg, ferr := fetchMessage(ctx, client, id)
+		if ferr != nil {
+			continue
+		}
+		id2, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
+			AccountID:   accountID,
+			MessageID:   msg.MessageID,
+			Folder:      "INBOX",
+			Uid:         sql.NullInt64{},
+			FromAddress: msg.FromAddress,
+			FromName:    msg.FromName,
+			ToAddresses: msg.To,
+			CcAddresses: msg.Cc,
+			Subject:     msg.Subject,
+			ReceivedAt:  msg.ReceivedAt,
+			BodyPlain:   msg.BodyPlain,
+			BodyHtml:    msg.BodyHTML,
+			HeadersJson: msg.HeadersJSON,
+		})
+		if err == nil {
+			if msg.Category != "" {
+				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{
+					Category: msg.Category, ID: id2,
+				})
+			}
+			written++
+		}
+	}
+	return written, nil
+}
+
+// SyncNow is a thin wrapper exposed to the frontend so the UI can trigger
+// an immediate pull from a button without waiting for the scheduler tick.
+// Returns the count of new/updated rows.
+func (s *Syncer) SyncNow(ctx context.Context, accountID int64) (int, error) {
+	return s.Sync(ctx, accountID)
+}
+
+// parseFlexDate accepts RFC3339 or YYYY-MM-DD and returns the UTC date.
+func parseFlexDate(v string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.Parse("2006-01-02", v); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("%q: expected RFC3339 or YYYY-MM-DD", v)
 }
 
 // gmailMessage is what fetchMessage returns once the REST payload is parsed.
