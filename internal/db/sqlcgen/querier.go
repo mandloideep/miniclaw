@@ -18,13 +18,22 @@ type Querier interface {
 	GetWorkspace(ctx context.Context, id int64) (Workspace, error)
 	ListAccounts(ctx context.Context) ([]Account, error)
 	ListAccountsByWorkspace(ctx context.Context, workspaceID int64) ([]Account, error)
+	ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccountParams) ([]ListEmailsByAccountRow, error)
+	ListEmailsByWorkspace(ctx context.Context, arg ListEmailsByWorkspaceParams) ([]ListEmailsByWorkspaceRow, error)
+	ListNeedsAttentionSince(ctx context.Context, generatedAt string) ([]ListNeedsAttentionSinceRow, error)
 	ListWorkspaces(ctx context.Context) ([]Workspace, error)
+	MarkEmailRead(ctx context.Context, id int64) error
+	MarkEmailUnread(ctx context.Context, id int64) error
+	MaxUIDForFolder(ctx context.Context, arg MaxUIDForFolderParams) (int64, error)
 	ReorderWorkspace(ctx context.Context, arg ReorderWorkspaceParams) error
+	SetCategory(ctx context.Context, arg SetCategoryParams) error
+	TogglePutAside(ctx context.Context, id int64) error
 	UpdateAccountCadence(ctx context.Context, arg UpdateAccountCadenceParams) error
 	UpdateAccountFetchSince(ctx context.Context, arg UpdateAccountFetchSinceParams) error
 	UpdateAccountModel(ctx context.Context, arg UpdateAccountModelParams) error
 	UpdateAccountSync(ctx context.Context, id int64) error
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) error
+	UpsertEmail(ctx context.Context, arg UpsertEmailParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

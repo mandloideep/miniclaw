@@ -14,6 +14,7 @@ import (
 
 	"github.com/mandloideep/miniclaw/internal/db"
 	"github.com/mandloideep/miniclaw/internal/services/account"
+	"github.com/mandloideep/miniclaw/internal/services/email"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
@@ -45,6 +46,7 @@ func run() error {
 	}
 	defer func() { _ = pool.Close() }()
 
+	accountSvc := account.New(pool)
 	app := application.New(application.Options{
 		Name:        "miniclaw",
 		Description: "Local-AI email triage with Telegram digests",
@@ -52,8 +54,10 @@ func run() error {
 			application.NewService(greet.New()),
 			application.NewService(keychain.New()),
 			application.NewService(workspace.New(pool)),
-			application.NewService(account.New(pool)),
+			application.NewService(accountSvc),
 			application.NewService(ollama.New()),
+			application.NewService(email.NewIMAPSyncer(pool, accountSvc)),
+			application.NewService(email.NewSMTPSender(accountSvc)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
