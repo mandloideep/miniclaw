@@ -32,10 +32,11 @@ type Email struct {
 // best-effort header map so the UI can render rich mail.
 type EmailDetail struct {
 	Email
-	To       string `json:"to"`
-	Cc       string `json:"cc"`
-	BodyHTML string `json:"bodyHtml"`
-	Headers  string `json:"headers"`
+	To       string   `json:"to"`
+	Cc       string   `json:"cc"`
+	BodyHTML string   `json:"bodyHtml"`
+	Headers  string   `json:"headers"`
+	Labels   []string `json:"labels"`
 }
 
 // Service is the Wails-registered service.
@@ -134,7 +135,27 @@ func (s *Service) Get(ctx context.Context, id int64) (EmailDetail, error) {
 	d.IsRead = isRead == 1
 	d.IsPutAside = isPutAside == 1
 	d.NeedsAttention = needs == 1
+	labels, lerr := s.q.ListEmailLabels(ctx, id)
+	if lerr == nil {
+		d.Labels = labels
+	} else {
+		d.Labels = []string{}
+	}
 	return d, nil
+}
+
+// ListLabels returns the label strings attached to one email. Exposed
+// separately so list rows can decorate themselves without loading the
+// full reader payload.
+func (s *Service) ListLabels(ctx context.Context, emailID int64) ([]string, error) {
+	labels, err := s.q.ListEmailLabels(ctx, emailID)
+	if err != nil {
+		return nil, fmt.Errorf("list email labels: %w", err)
+	}
+	if labels == nil {
+		labels = []string{}
+	}
+	return labels, nil
 }
 
 // ListOlderByWorkspace returns N emails strictly older than beforeReceivedAt

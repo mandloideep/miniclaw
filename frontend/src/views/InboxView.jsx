@@ -485,6 +485,11 @@ function EmailReader({ detail, onPutAside, onMarkedUnread }) {
               <span>{formatStamp(detail.receivedAt, true)}</span>
               {detail.to && <span>to {detail.to}</span>}
               {detail.category && <Badge variant="outline">{detail.category}</Badge>}
+              {detail.labels?.map((label) => (
+                <Badge key={label} variant="muted" title={`Label: ${label}`}>
+                  {prettyLabel(label)}
+                </Badge>
+              ))}
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -853,6 +858,15 @@ function nextSnoozeAt(kind) {
   // computed something <= now (clock skew, sub-second rounding).
   if (target <= now) target = new Date(now.getTime() + 60_000);
   return target.toISOString();
+}
+
+// prettyLabel turns the upstream Gmail-shaped label name into something
+// pleasant to read inline. Gmail's system labels arrive as
+// CATEGORY_PROMOTIONS / IMPORTANT / etc.; user labels arrive verbatim.
+function prettyLabel(raw) {
+  if (!raw) return "";
+  const stripped = raw.replace(/^CATEGORY_/, "");
+  return stripped.toLowerCase().replace(/_/g, " ");
 }
 
 // toLocalInputValue formats a Date for a <input type="datetime-local"> field.
