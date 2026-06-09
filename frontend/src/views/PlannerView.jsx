@@ -331,18 +331,22 @@ function NotesPane({ workspace }) {
   const [list, setList] = useState([]);
   const [active, setActive] = useState(null);
   const [draft, setDraft] = useState({ title: "", bodyMd: "" });
+  const [query, setQuery] = useState("");
 
   const refresh = useCallback(async () => {
-    const rows = await Notes.List(workspace.id);
+    const rows = query.trim()
+      ? await Notes.Search(workspace.id, query.trim())
+      : await Notes.List(workspace.id);
     setList(rows);
     if (active && !rows.find((r) => r.id === active.id)) {
       setActive(null);
     }
-  }, [workspace.id, active]);
+  }, [workspace.id, active, query]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    const t = setTimeout(refresh, query ? 200 : 0);
+    return () => clearTimeout(t);
+  }, [refresh, query]);
 
   async function save() {
     if (active) {
@@ -362,7 +366,18 @@ function NotesPane({ workspace }) {
           <Plus className="w-3.5 h-3.5" />
           New note
         </Button>
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search notes…"
+          className="h-8 text-[12px]"
+        />
         <ul className="space-y-0.5">
+          {list.length === 0 && (
+            <li className="text-[12px] text-ink-tertiary px-2 py-2">
+              {query ? "No matches." : "No notes yet."}
+            </li>
+          )}
           {list.map((n) => {
             const sel = active?.id === n.id;
             return (
@@ -370,10 +385,9 @@ function NotesPane({ workspace }) {
                 <button
                   type="button"
                   onClick={() => setActive({ ...n })}
-                  className={
-                    "w-full text-left px-2 py-1.5 rounded-md text-[13px] " +
-                    (sel ? "bg-surface-2 text-ink" : "text-ink-muted hover:bg-surface-1")
-                  }
+                  className={`w-full text-left px-2 py-1.5 rounded-md text-[13px] ${
+                    sel ? "bg-surface-2 text-ink" : "text-ink-muted hover:bg-surface-1"
+                  }`}
                 >
                   {n.title || <span className="italic text-ink-tertiary">(untitled)</span>}
                 </button>

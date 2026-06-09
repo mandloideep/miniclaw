@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mandloideep/miniclaw/internal/db/sqlcgen"
@@ -220,11 +221,14 @@ func (s *TodosService) Delete(ctx context.Context, id int64) error {
 
 // NotesService exposes per-workspace markdown notes.
 type NotesService struct {
-	q *sqlcgen.Queries
+	q    *sqlcgen.Queries
+	pool *sql.DB
 }
 
 // NewNotes wires the notes service to the shared pool.
-func NewNotes(pool *sql.DB) *NotesService { return &NotesService{q: sqlcgen.New(pool)} }
+func NewNotes(pool *sql.DB) *NotesService {
+	return &NotesService{q: sqlcgen.New(pool), pool: pool}
+}
 
 // Note is the frontend-facing shape.
 type Note struct {
@@ -291,4 +295,36 @@ func (s *NotesService) Update(ctx context.Context, id int64, title, bodyMD strin
 // Delete removes a note.
 func (s *NotesService) Delete(ctx context.Context, id int64) error {
 	return s.q.DeleteNote(ctx, id)
+}
+
+// Search returns notes in a workspace whose title or body contains q
+// (case-insensitive substring match). LIKE is sufficient here — notes are
+// short-lived and small; FTS would be overkill for a few hundred rows.
+func (s *NotesService) Search(ctx context.Context, workspaceID int64, q string) ([]Note, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return s.List(ctx, workspaceID)
+	}
+	const query = `
+		SELECT id, workspace_id, title, body_md, created_at, updated_at
+		FROM notes
+		WHERE workspace_id = ?
+		  AND (LOWER(title) LIKE ? OR LOWER(body_md) LIKE ?)
+		ORDER BY updated_at DESC
+		LIMIT 100`
+	like := "%" + strings.ToLower(q) + "%"
+	rows, err := s.pool.QueryContext(ctx, query, workspaceID, like, like)
+	if err != nil {
+		return nil, fmt.Errorf("search notes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []Note{}
+	for rows.Next() {
+		var n Note
+		if err := rows.Scan(&n.ID, &n.WorkspaceID, &n.Title, &n.BodyMD, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan note: %w", err)
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }
