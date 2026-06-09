@@ -12,3 +12,10 @@ import (
 func oauth2HTTPClient(ctx context.Context, src oauth2.TokenSource) *http.Client {
 	return oauth2.NewClient(ctx, src)
 }
+
+// AuthedHTTPClient is the exported alias other packages (planner's calendar
+// push/pull) use to build an authed client without having to know the
+// oauth2 plumbing.
+func AuthedHTTPClient(ctx context.Context, src oauth2.TokenSource) *http.Client {
+	return oauth2HTTPClient(ctx, src)
+}

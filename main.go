@@ -116,7 +116,7 @@ func run() error {
 			application.NewService(inbox.New(pool)),
 			application.NewService(attachSvc),
 			application.NewService(snoozeSvc),
-			application.NewService(planner.NewCalendar(pool)),
+			application.NewService(planner.NewCalendar(pool, accountSvc)),
 			application.NewService(planner.NewTodos(pool)),
 			application.NewService(planner.NewNotes(pool)),
 		},

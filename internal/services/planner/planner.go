@@ -12,21 +12,47 @@ package planner
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/mandloideep/miniclaw/internal/db/sqlcgen"
+	"github.com/mandloideep/miniclaw/internal/services/account"
 )
 
 // CalendarService exposes time-blocking CRUD.
 type CalendarService struct {
-	q *sqlcgen.Queries
+	q        *sqlcgen.Queries
+	pool     *sql.DB
+	accounts *account.Service
 }
 
 // NewCalendar wires the calendar service to the shared pool.
-func NewCalendar(pool *sql.DB) *CalendarService {
-	return &CalendarService{q: sqlcgen.New(pool)}
+// accounts may be nil — only the Google push/pull paths need it; the
+// local-only CRUD continues to work without it (helpful for tests).
+func NewCalendar(pool *sql.DB, accounts *account.Service) *CalendarService {
+	return &CalendarService{q: sqlcgen.New(pool), pool: pool, accounts: accounts}
+}
+
+// getBlock is a private one-row read since the sqlc query set doesn't
+// have a single-block fetch and regenerating sqlc adds friction we don't
+// need just to push to Google.
+func (s *CalendarService) getBlock(ctx context.Context, id int64) (Block, error) {
+	const q = `
+		SELECT id, workspace_id, title, notes, start_at, end_at, kind,
+		       google_event_id, created_at, updated_at
+		FROM calendar_blocks WHERE id = ? LIMIT 1`
+	var b Block
+	row := s.pool.QueryRowContext(ctx, q, id)
+	if err := row.Scan(
+		&b.ID, &b.WorkspaceID, &b.Title, &b.Notes,
+		&b.StartAt, &b.EndAt, &b.Kind,
+		&b.GoogleEventID, &b.CreatedAt, &b.UpdatedAt,
+	); err != nil {
+		return Block{}, fmt.Errorf("get block %d: %w", id, err)
+	}
+	return b, nil
 }
 
 // Block is the frontend-facing shape.
@@ -98,14 +124,168 @@ func (s *CalendarService) Delete(ctx context.Context, id int64) error {
 	return s.q.DeleteCalendarBlock(ctx, id)
 }
 
-// Promote stamps a placeholder google_event_id so the UI can mark the
-// row as "intended to sync"; full two-way sync against the Google API
-// lands later. Returns nil even when the block doesn't exist — the
-// frontend treats Promote as best-effort.
-func (s *CalendarService) Promote(ctx context.Context, id int64) error {
+// Promote pushes the local block to the user's primary Google Calendar via
+// events.insert and persists the returned event ID. accountID must be a
+// Gmail-OAuth account whose user has granted calendar.events scope (Gmail
+// re-consent flow). Pre-existing rows already stamped with a real event ID
+// are not re-pushed; the placeholder "pending:*" left by older versions is
+// treated as un-promoted.
+func (s *CalendarService) Promote(ctx context.Context, blockID, accountID int64) error {
+	if s.accounts == nil {
+		return errors.New("calendar push needs an account service")
+	}
+	acc, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("get account %d: %w", accountID, err)
+	}
+	if acc.AuthKind != account.AuthGmailOAuth {
+		return errors.New("only Gmail-OAuth accounts can push to Google Calendar")
+	}
+	b, err := s.getBlock(ctx, blockID)
+	if err != nil {
+		return err
+	}
+	if b.GoogleEventID != "" && !strings.HasPrefix(b.GoogleEventID, "pending:") {
+		// Already pushed; treat repeated calls as no-ops.
+		return nil
+	}
+	client, err := authedCalendarClient(ctx, acc.EmailAddress)
+	if err != nil {
+		return err
+	}
+	evt, err := insertGoogleEvent(ctx, client, b)
+	if err != nil {
+		return err
+	}
 	return s.q.SetCalendarGoogleEvent(ctx, sqlcgen.SetCalendarGoogleEventParams{
-		GoogleEventID: fmt.Sprintf("pending:%d", id), ID: id,
+		GoogleEventID: evt.ID, ID: blockID,
 	})
+}
+
+// Unpromote tears down the Google event mirror for a block and clears the
+// local google_event_id so the row can be re-pushed cleanly.
+func (s *CalendarService) Unpromote(ctx context.Context, blockID, accountID int64) error {
+	if s.accounts == nil {
+		return errors.New("calendar push needs an account service")
+	}
+	acc, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("get account %d: %w", accountID, err)
+	}
+	b, err := s.getBlock(ctx, blockID)
+	if err != nil {
+		return err
+	}
+	if b.GoogleEventID == "" || strings.HasPrefix(b.GoogleEventID, "pending:") {
+		// Nothing on Google to clean up; just clear the local stamp.
+		return s.q.SetCalendarGoogleEvent(ctx, sqlcgen.SetCalendarGoogleEventParams{
+			GoogleEventID: "", ID: blockID,
+		})
+	}
+	client, err := authedCalendarClient(ctx, acc.EmailAddress)
+	if err != nil {
+		return err
+	}
+	if err := deleteGoogleEvent(ctx, client, b.GoogleEventID); err != nil {
+		return err
+	}
+	return s.q.SetCalendarGoogleEvent(ctx, sqlcgen.SetCalendarGoogleEventParams{
+		GoogleEventID: "", ID: blockID,
+	})
+}
+
+// PullFromGoogle imports upcoming Google Calendar events for accountID into
+// the given workspace as kind="meeting" blocks. Events authored by miniclaw
+// (carry our extendedProperties.private.miniclawBlockId tag) are skipped to
+// avoid mirror loops. Returns the count inserted.
+func (s *CalendarService) PullFromGoogle(ctx context.Context, workspaceID, accountID int64) (int, error) {
+	if s.accounts == nil {
+		return 0, errors.New("calendar pull needs an account service")
+	}
+	acc, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("get account %d: %w", accountID, err)
+	}
+	if acc.AuthKind != account.AuthGmailOAuth {
+		return 0, errors.New("only Gmail-OAuth accounts can pull from Google Calendar")
+	}
+	client, err := authedCalendarClient(ctx, acc.EmailAddress)
+	if err != nil {
+		return 0, err
+	}
+	events, err := listUpcomingGoogleEvents(ctx, client, 1, 30)
+	if err != nil {
+		return 0, err
+	}
+	existing, err := s.q.ListCalendarBlocks(ctx, sqlcgen.ListCalendarBlocksParams{
+		WorkspaceID: workspaceID,
+		EndAt:       time.Now().UTC().Add(-31 * 24 * time.Hour).Format(time.RFC3339),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list existing blocks: %w", err)
+	}
+	have := map[string]bool{}
+	for _, r := range existing {
+		if r.GoogleEventID != "" {
+			have[r.GoogleEventID] = true
+		}
+	}
+	written := 0
+	for _, evt := range events {
+		if evt.ID == "" || have[evt.ID] {
+			continue
+		}
+		if evt.Extended != nil && evt.Extended.Private["miniclawBlockId"] != "" {
+			// Originated from us; the local row already exists.
+			continue
+		}
+		if evt.Status == "cancelled" {
+			continue
+		}
+		startISO, endISO := normalizeGCalRange(evt.Start.DateTime, evt.End.DateTime)
+		if startISO == "" || endISO == "" {
+			continue
+		}
+		row, err := s.q.CreateCalendarBlock(ctx, sqlcgen.CreateCalendarBlockParams{
+			WorkspaceID: workspaceID,
+			Title:       firstNonEmpty(evt.Summary, "(no title)"),
+			Notes:       evt.Description,
+			StartAt:     startISO,
+			EndAt:       endISO,
+			Kind:        "meeting",
+		})
+		if err != nil {
+			return written, fmt.Errorf("insert imported block: %w", err)
+		}
+		if err := s.q.SetCalendarGoogleEvent(ctx, sqlcgen.SetCalendarGoogleEventParams{
+			GoogleEventID: evt.ID, ID: row.ID,
+		}); err != nil {
+			return written, fmt.Errorf("stamp google id: %w", err)
+		}
+		written++
+	}
+	return written, nil
+}
+
+func normalizeGCalRange(start, end string) (string, string) {
+	s, err := time.Parse(time.RFC3339, start)
+	if err != nil {
+		return "", ""
+	}
+	e, err := time.Parse(time.RFC3339, end)
+	if err != nil {
+		return "", ""
+	}
+	return s.UTC().Format(time.RFC3339), e.UTC().Format(time.RFC3339)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func validateBlockTimes(startRFC3339, endRFC3339 string) error {

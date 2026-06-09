@@ -51,10 +51,14 @@ type clientConfig struct {
 	} `json:"installed"`
 }
 
-// Scopes asked for during consent. gmail.readonly is enough for the
-// summarisation/digest use case; widen later when reply-from-app lands.
+// Scopes asked for during consent. gmail.readonly powers ingest/digest;
+// calendar.events lets the planner promote local blocks to Google Calendar
+// and pull events back. Adding a scope here forces existing accounts
+// through re-consent — the next sync that needs the new scope will fail
+// with insufficient_scope until the user re-authorises.
 var Scopes = []string{
 	"https://www.googleapis.com/auth/gmail.readonly",
+	"https://www.googleapis.com/auth/calendar.events",
 	"https://www.googleapis.com/auth/userinfo.email",
 }
 
