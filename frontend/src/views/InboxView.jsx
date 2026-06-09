@@ -7,6 +7,7 @@ import {
   ImageOff,
   Inbox,
   LoaderCircle,
+  MailOpen,
   PauseCircle,
   PlayCircle,
   RefreshCw,
@@ -211,7 +212,14 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
         />
       </section>
       <section className="flex-1 min-w-0 flex flex-col">
-        <EmailReader detail={detail} onPutAside={refresh} />
+        <EmailReader
+          detail={detail}
+          onPutAside={refresh}
+          onMarkedUnread={() => {
+            setSelectedId(null);
+            refresh();
+          }}
+        />
       </section>
     </div>
   );
@@ -336,7 +344,7 @@ function EmailRow({ email, active, onClick }) {
   );
 }
 
-function EmailReader({ detail, onPutAside }) {
+function EmailReader({ detail, onPutAside, onMarkedUnread }) {
   const [replying, setReplying] = useState(false);
   const [showImages, setShowImages] = useState(false);
   const [snoozeBusy, setSnoozeBusy] = useState(false);
@@ -403,6 +411,18 @@ function EmailReader({ detail, onPutAside }) {
                 <ImageIcon className="w-3.5 h-3.5" />
               )}
               {showImages ? "Hide images" : "Show images"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                await InboxApi.MarkUnread(detail.id);
+                onMarkedUnread?.();
+              }}
+              title="Mark this message as unread and return to the inbox"
+            >
+              <MailOpen className="w-3.5 h-3.5" />
+              Mark unread
             </Button>
             <Button
               size="sm"
