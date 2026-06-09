@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A . application
+Name=miniclaw
+Comment=Local-AI email triage with Telegram digests
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/. %u
+Exec=/usr/local/bin/miniclaw %u
 Terminal=false
 Type=Application
-Icon=.
+Icon=miniclaw
 Categories=Utility;
-StartupWMClass=.
+StartupWMClass=miniclaw
 
  

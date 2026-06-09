@@ -3,26 +3,26 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "."
+name: "miniclaw"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.1.0"
+version: "0.0.1"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "A . application"
-vendor: "My Company"
+description: "Local-AI email triage with Telegram digests"
+vendor: "miniclaw"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/."
-    dst: "/usr/local/bin/."
+  - src: "./bin/miniclaw"
+    dst: "/usr/local/bin/miniclaw"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/..png"
-  - src: "./build/linux/..desktop"
-    dst: "/usr/share/applications/..desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/miniclaw.png"
+  - src: "./build/linux/miniclaw.desktop"
+    dst: "/usr/share/applications/miniclaw.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:
