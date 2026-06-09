@@ -9,20 +9,31 @@ import (
 )
 
 type Querier interface {
+	AssignRecipientToAccount(ctx context.Context, arg AssignRecipientToAccountParams) error
+	AssignRecipientToWorkspace(ctx context.Context, arg AssignRecipientToWorkspaceParams) error
 	CreateIMAPAccount(ctx context.Context, arg CreateIMAPAccountParams) (Account, error)
 	CreateOAuthAccount(ctx context.Context, arg CreateOAuthAccountParams) (Account, error)
+	CreateRecipient(ctx context.Context, arg CreateRecipientParams) (TelegramRecipient, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
 	DeleteAccount(ctx context.Context, id int64) error
+	DeleteRecipient(ctx context.Context, id int64) error
 	DeleteWorkspace(ctx context.Context, id int64) error
 	GetAccount(ctx context.Context, id int64) (Account, error)
 	GetAccountModel(ctx context.Context, id int64) (GetAccountModelRow, error)
 	GetSummaryForEmail(ctx context.Context, emailID int64) (Summary, error)
+	GetTelegramSettings(ctx context.Context) (GetTelegramSettingsRow, error)
 	GetWorkspace(ctx context.Context, id int64) (Workspace, error)
 	ListAccounts(ctx context.Context) ([]Account, error)
 	ListAccountsByWorkspace(ctx context.Context, workspaceID int64) ([]Account, error)
 	ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccountParams) ([]ListEmailsByAccountRow, error)
 	ListEmailsByWorkspace(ctx context.Context, arg ListEmailsByWorkspaceParams) ([]ListEmailsByWorkspaceRow, error)
 	ListNeedsAttentionSince(ctx context.Context, generatedAt string) ([]ListNeedsAttentionSinceRow, error)
+	ListRecipients(ctx context.Context) ([]TelegramRecipient, error)
+	ListRecipientsForAccount(ctx context.Context, accountID int64) ([]ListRecipientsForAccountRow, error)
+	// Combined fan-out: union of workspace and account assignments for a
+	// given account, so callers can fire a notify with one query.
+	ListRecipientsForFanout(ctx context.Context, accountID int64) ([]ListRecipientsForFanoutRow, error)
+	ListRecipientsForWorkspace(ctx context.Context, workspaceID int64) ([]ListRecipientsForWorkspaceRow, error)
 	ListUnsummarizedByAccount(ctx context.Context, arg ListUnsummarizedByAccountParams) ([]ListUnsummarizedByAccountRow, error)
 	ListWorkspaces(ctx context.Context) ([]Workspace, error)
 	MarkEmailRead(ctx context.Context, id int64) error
@@ -30,7 +41,11 @@ type Querier interface {
 	MaxUIDForFolder(ctx context.Context, arg MaxUIDForFolderParams) (int64, error)
 	ReorderWorkspace(ctx context.Context, arg ReorderWorkspaceParams) error
 	SetCategory(ctx context.Context, arg SetCategoryParams) error
+	SetDigestTime(ctx context.Context, digestTime string) error
+	SetTelegramBotToken(ctx context.Context, botToken string) error
 	TogglePutAside(ctx context.Context, id int64) error
+	UnassignRecipientFromAccount(ctx context.Context, arg UnassignRecipientFromAccountParams) error
+	UnassignRecipientFromWorkspace(ctx context.Context, arg UnassignRecipientFromWorkspaceParams) error
 	UpdateAccountCadence(ctx context.Context, arg UpdateAccountCadenceParams) error
 	UpdateAccountFetchSince(ctx context.Context, arg UpdateAccountFetchSinceParams) error
 	UpdateAccountModel(ctx context.Context, arg UpdateAccountModelParams) error
