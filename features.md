@@ -17,20 +17,14 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
   - `parseMessage` falls back to dumping raw RFC822 as plaintext if `mail.CreateReader` fails (quirky servers). Don't pipe that into the summariser without truncating.
   - Search criteria with both `Since` and `UID` ranges narrow the intersection — be explicit about which one is the watermark on each pass.
 
-### 1.2 Gmail OAuth (S — needs parity)
-- REST sync via `gmailoauth.Syncer.Sync` using `messages.list` + `messages.get?format=full`.
-- Gotchas / open work:
-  - Only fetches `text/plain` + `text/html`; inline images (CID parts), attachments, and remote-image data are dropped → frontend can't render rich mail.
-  - No "fetch older" path — the watermark is `after:<date>`, never `before:`. Need a `Backfill(accountID, beforeDate)` that walks `before:` pages until quota or user stop.
-  - `LabelIds` only mapped to four categories — Gmail's native labels (CATEGORY_PERSONAL, IMPORTANT, STARRED, user labels) are discarded.
-  - No incremental `historyId` cursor — every pass re-lists. Cheap at small scale, will burn quota at large.
+### 1.2 Gmail OAuth (S)
+- REST sync via `gmailoauth.Syncer.Sync` + `BackfillBefore` + `SyncNow`.
+- Walks `payload.parts` for inline images (Content-ID) and attachments (Filename), hydrates oversize parts via `attachments.get`, stores via `internal/services/attachments`.
+- Still open:
+  - `LabelIds` only mapped to four categories — Gmail's native labels (CATEGORY_PERSONAL, IMPORTANT, STARRED, user labels) are discarded. Persist in a `email_labels(email_id, label)` table; mirror IMAP's `\Flagged`/`\Seen` paths.
+  - No incremental `historyId` cursor — every pass re-lists. Cheap at small scale, will burn quota at large. Implement `users.history.list` once initial sync is done.
   - Gmail returns `Message-ID` with angle brackets; we store as-is and rely on the UNIQUE index to dedupe — verify on accounts that auto-rewrite Message-ID.
-- Build steps for parity:
-  - Walk `payload.parts` for `image/*` parts with `Content-ID` and store as blobs (or a side table `email_attachments`) keyed by `(email_id, cid)`.
-  - Add `gmailoauth.Syncer.Backfill(ctx, accountID, before time.Time, max int)`.
-  - Add `gmailoauth.Syncer.SyncNow(ctx, accountID)` as a thin frontend wrapper around Sync that returns `{written, since}` to give the UI a status toast.
-  - Persist Gmail labels in a `email_labels(email_id, label)` table; mirror IMAP's `\Flagged`/`\Seen` paths.
-  - Implement `users.history.list` once initial sync is done to swap polling for delta sync.
+  - MatchesBlock isn't consulted in the Gmail path yet — IMAP is.
 
 ### 1.3 Microsoft OAuth (P)
 - `internal/services/msoauth/sync.go` exists and is wired but parity work mirrors Gmail above.
@@ -46,9 +40,10 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 - `internal/scheduler` ticks per-account on `sync_cadence_secs`. Picks IMAP / Gmail / MS by `auth_kind`.
 - Gotcha: cadence < 60s on Gmail will get you rate-limited; cap at 60s in UI.
 
-### 1.6 Sync controls UI (T)
-- Need: "Sync now" button per account, "Fetch older — last 30 days" button, sync-status indicator in the status bar.
-- Build: thin wrappers in `gmailoauth.Service` / `msoauth.Service` / `email.IMAPSyncer` callable from JS; emit `application.RegisterEvent[SyncProgress]` so the UI can subscribe.
+### 1.6 Sync controls UI (S)
+- `IMAPSync.SyncNow` / `IMAPSync.BackfillBefore` / `GmailOAuth.SyncNow` / `GmailOAuth.BackfillBefore` exposed to JS.
+- `sync_progress` event registered in `main.go` fires per account (`start` / `done` / `error`); top bar shows a live pill.
+- Still open: per-account progress (count of items remaining) inside a long backfill — today's event is per-account, not per-message.
 
 ---
 
@@ -59,23 +54,24 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 - FTS5 virtual table over `subject + body_plain`.
 - Gotcha: `body_html` is already stored but not exposed by `inbox.Service` — frontend only ever sees `body_plain`, which is why images and formatting are invisible.
 
-### 2.2 Inbox read API (P)
-- `inbox.Service.ListByWorkspace`, `ListByAccount`, `MarkRead`, `MarkUnread` ship.
-- Missing:
-  - `GetEmail(id)` returning the full record incl. `body_html`, `to`, `cc`, headers, attachments.
-  - `ListSince(accountID, beforeReceivedAt, limit)` for infinite-scroll back in time.
-  - `Search(q, workspaceID)` against `emails_fts`.
-  - `ListByCategory(workspaceID, category)`.
+### 2.2 Inbox read API (S)
+- `Get`, `ListByWorkspace`, `ListByAccount`, `ListOlderByWorkspace`, `Search`, `MarkRead`, `MarkUnread` ship.
+- Search hits `emails_fts` directly; user input is quoted as a phrase to keep multi-word queries working.
+- Still open: `ListByCategory(workspaceID, category)` for the category drill-downs.
 
 ### 2.3 Threading (T)
 - We index by `Message-ID` only. No `In-Reply-To`/`References` walk.
 - Build: add columns `in_reply_to`, `references` and a derived `thread_id` (`COALESCE(References.split[0], Message-ID)`), with an index. Frontend collapses replies under the root.
 - Gotcha: Gmail's `threadId` ≠ RFC References — use ours, treat Gmail's as a sync hint only.
 
-### 2.4 Attachments + inline images (T)
-- Schema: `email_attachments(id, email_id, content_id, filename, mime, size, blob | path)`.
-- Frontend rendering: rewrite `<img src="cid:abc">` → `wails:///attachments/<id>` served via a Wails asset handler.
-- Remote images: gate behind a user setting ("load remote images: never / per-sender / always"); inject a placeholder otherwise. Strips most tracking pixels for free.
+### 2.4 Attachments + inline images (P)
+- Schema: `email_attachments(email_id, content_id, filename, mime_type, size_bytes, data BLOB, is_inline)` (migration 0004).
+- Gmail sync walks parts, hydrates deferred bodies via `attachments.get`, writes via `attachments.Service.Store`.
+- Reader splices bytes as `data:` URLs inside the sandboxed iframe srcdoc — same-origin policy + the Wails asset handler don't play well with `cid:` rewrites, so inlining sidesteps the whole problem.
+- Still open:
+  - IMAP path doesn't store attachments yet — `parseMessage` discards them. Mirror the Gmail shape: collect parts during `mail.NextPart`, route image/* with Content-ID through `attachments.Service.Store`.
+  - File attachments (non-image, non-inline) are stored but no UI surfaces them as downloads yet.
+  - Remote-image policy is per-message ("Show images" toggle); per-sender allowlist hasn't landed.
 
 ### 2.5 HTML sanitization (T)
 - Sanitize server-side with `bluemonday` (Go) — strip `<script>`, `<iframe>`, JS event attrs, `javascript:` URLs.
@@ -88,7 +84,9 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 
 ### 3.1 Per-email summary (S)
 - `internal/services/summary` calls Ollama `/api/generate`. Stores summary + `needs_attention` flag.
-- Gotcha: model picks attention via a JSON-shaped prompt — defensive parse, log the raw response on parse failure.
+- Empty `response` from Ollama is now an explicit error (was silently breaking JSON decode). Summariser logs the first failure fully, swallows the rest into a count line, bails after 3 consecutive empties, and retries once without JSON mode for small instruct models that reject `format=json`.
+- Last error is stored on `ollama.Service.LastError()` and surfaces in `Ollama.Status` for the UI banner.
+- Gotcha: defensive JSON extraction — small models often wrap output in prose; `extractJSON` pulls the first balanced `{...}` block.
 
 ### 3.2 Periodic rundown (P)
 - `internal/services/digest` emits a workspace-level summary on cadence; routes to Telegram.
@@ -111,6 +109,7 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 
 ### 3.7 Snooze (T)
 - Extend put-aside with `snoozed_until TEXT`. A daily ticker un-snoozes; emit a Telegram nudge if `needs_attention`.
+- UI plan: shadcn `DropdownMenu` on the reader with Until tomorrow / Next week / Custom — primitive is already in `components/ui/dropdown-menu.tsx`, wire-up is the remaining work.
 
 ### 3.8 Compose / reply (P)
 - `SMTPSender.Send` ships. Plain-text only, quoted body.
@@ -155,19 +154,20 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 - Primitives sourced from shadcn (`components.json` configured) — don't hand-roll buttons, dialogs, sidebars, etc.
 - Lucide for icons; Linear-style monochrome only.
 
-### 7.2 App shell (P)
+### 7.2 App shell (S)
 - Three pane: workspace strip → folder/account sidebar → message list → reader.
-- Command palette (⌘K) via `shadcn/command` for sender search, message search, "go to put-aside", "sync now".
-- Status bar (bottom) shows Ollama health + last sync per account.
+- Command palette (⌘K / Ctrl-K) opens a shadcn Dialog with quick actions + FTS5 results.
+- Top bar shows Ollama health, keychain status, live sync pill, sync-now button, settings gear.
+- Still open: account "last synced" surfacing in the side rail, system tray icon.
 
-### 7.3 Inbox view (P)
-- Virtualized list when count > 200 (use `@tanstack/react-virtual`; not yet added — add when message count outgrows the naive render).
-- HTML body rendered inside a sandboxed `<iframe srcdoc>` with `style` overrides for color-scheme: dark.
-- Fetch-older button at the bottom of the list — calls `Backfill` and re-queries.
+### 7.3 Inbox view (S)
+- HTML body inside sandboxed `<iframe srcdoc>` (allow-same-origin only). Reader has a shadcn `Tabs` toggle for Rendered / Plain text. Inline images splice from the attachments table as data URLs.
+- "Load older" walks the cache; "Fetch 200 older from server" calls `BackfillBefore` for both Gmail and IMAP.
+- Still open: virtualization when count > 200 (use `@tanstack/react-virtual`), thread collapse, snooze affordance.
 
 ### 7.4 Settings (P)
-- Workspaces CRUD, Accounts CRUD, Ollama health, Telegram setup ship.
-- Missing: image-loading policy, sync cadence picker per account, "default workspace for new account".
+- Sections rendered as shadcn `Card` + `Tabs` + `Input` + `Label`. Add-account flow uses `Tabs` to switch IMAP / Gmail / Microsoft.
+- Missing: image-loading policy, sync cadence picker per account, "default workspace for new account", `AlertDialog` for the destructive delete flows (still uses `window.confirm`).
 
 ### 7.5 Onboarding (T)
 - First-run: pick model from `Ollama.ListModels`, pick default workspace, add first account.

@@ -17,6 +17,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Separator } from "../components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Textarea } from "../components/ui/textarea";
 
 const PAGE = 80;
@@ -327,7 +328,24 @@ function EmailReader({ detail, onPutAside }) {
         </div>
       </header>
       <ScrollArea className="flex-1 px-6 py-5">
-        <HtmlBody detail={detail} loadRemoteImages={showImages} />
+        {detail.bodyHtml && detail.bodyHtml.trim().length > 0 ? (
+          <Tabs defaultValue="html">
+            <TabsList>
+              <TabsTrigger value="html">Rendered</TabsTrigger>
+              <TabsTrigger value="plain">Plain text</TabsTrigger>
+            </TabsList>
+            <TabsContent value="html">
+              <HtmlBody detail={detail} loadRemoteImages={showImages} />
+            </TabsContent>
+            <TabsContent value="plain">
+              <pre className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink-muted font-sans">
+                {detail.bodyPlain || "(empty body)"}
+              </pre>
+            </TabsContent>
+          </Tabs>
+        ) : (
+          <HtmlBody detail={detail} loadRemoteImages={showImages} />
+        )}
         {replying && (
           <>
             <Separator className="my-6" />

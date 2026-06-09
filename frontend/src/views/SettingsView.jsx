@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Accounts, Digest, GmailOAuth, MSOAuth, Ollama, Telegram, Workspaces } from "../api";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 
 export default function SettingsView({
   workspaces,
@@ -18,43 +24,57 @@ export default function SettingsView({
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, description, action, children }) {
   return (
-    <section className="bg-surface-1 border border-hairline rounded-lg p-4">
-      <h2 className="text-base font-medium mb-3">{title}</h2>
-      {children}
-    </section>
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div>
+          <CardTitle>{title}</CardTitle>
+          {description && <CardDescription>{description}</CardDescription>}
+        </div>
+        {action}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }
 
 function WorkspacesSection({ workspaces, onChange }) {
   const [draft, setDraft] = useState({ name: "", emoji: "" });
   return (
-    <Section title="Workspaces">
-      <ul className="space-y-1.5 mb-3">
+    <Section
+      title="Workspaces"
+      description="Group accounts into themed inboxes. Each workspace gets its own list, summary cadence, and Telegram destination."
+    >
+      <ul className="space-y-1.5 mb-4">
         {workspaces.map((w) => (
           <li
             key={w.id}
-            className="flex items-center gap-3 px-2 py-1.5 rounded border border-hairline"
+            className="flex items-center gap-3 px-3 py-2 rounded-md border border-hairline bg-surface-2"
           >
-            <span className="text-lg">{w.emoji}</span>
-            <span className="flex-1">{w.name}</span>
-            <button
-              type="button"
+            <span className="text-base">{w.emoji}</span>
+            <span className="flex-1 text-[13px] text-ink">{w.name}</span>
+            <Badge variant="muted">
+              {/* eslint-disable-next-line react/no-array-index-key */}
+              {workspaces.length === 1 ? "default" : "workspace"}
+            </Badge>
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={async () => {
                 if (!window.confirm(`Delete workspace "${w.name}"?`)) return;
                 await Workspaces.Delete(w.id);
                 onChange();
               }}
-              className="text-xs text-ink-subtle hover:text-danger"
+              className="text-ink-subtle hover:text-danger"
             >
-              delete
-            </button>
+              Remove
+            </Button>
           </li>
         ))}
       </ul>
       <form
-        className="flex gap-2"
+        className="flex gap-2 items-end"
         onSubmit={async (e) => {
           e.preventDefault();
           if (!draft.name) return;
@@ -63,21 +83,27 @@ function WorkspacesSection({ workspaces, onChange }) {
           onChange();
         }}
       >
-        <input
-          placeholder="emoji"
-          value={draft.emoji}
-          onChange={(e) => setDraft({ ...draft, emoji: e.target.value })}
-          className="w-16 px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
-        />
-        <input
-          placeholder="workspace name"
-          value={draft.name}
-          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          className="flex-1 px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
-        />
-        <button type="submit" className="px-3 py-1.5 rounded bg-brand text-sm">
-          Add
-        </button>
+        <div>
+          <Label htmlFor="ws-emoji">Emoji</Label>
+          <Input
+            id="ws-emoji"
+            value={draft.emoji}
+            onChange={(e) => setDraft({ ...draft, emoji: e.target.value })}
+            placeholder="✨"
+            className="w-16 mt-1"
+          />
+        </div>
+        <div className="flex-1">
+          <Label htmlFor="ws-name">Name</Label>
+          <Input
+            id="ws-name"
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            placeholder="Workspace name"
+            className="mt-1"
+          />
+        </div>
+        <Button type="submit">Add</Button>
       </form>
     </Section>
   );
@@ -207,21 +233,17 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-2 border border-hairline rounded p-3">
-      <div className="flex gap-2">
-        {["imap", "gmail_oauth", "ms_oauth"].map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => setKind(k)}
-            className={`px-3 py-1 text-xs rounded ${
-              kind === k ? "bg-ink text-canvas" : "bg-surface-2"
-            }`}
-          >
-            {k === "imap" ? "IMAP/SMTP" : k === "gmail_oauth" ? "Gmail OAuth" : "Microsoft OAuth"}
-          </button>
-        ))}
-      </div>
+    <form
+      onSubmit={submit}
+      className="space-y-3 border border-hairline rounded-md p-3 bg-surface-2"
+    >
+      <Tabs value={kind} onValueChange={setKind}>
+        <TabsList>
+          <TabsTrigger value="imap">IMAP / SMTP</TabsTrigger>
+          <TabsTrigger value="gmail_oauth">Gmail OAuth</TabsTrigger>
+          <TabsTrigger value="ms_oauth">Microsoft OAuth</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       <select
         value={form.workspaceId}
