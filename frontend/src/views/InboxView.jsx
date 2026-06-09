@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  AlertTriangle,
   ChevronDown,
   Clock,
   CornerUpLeft,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Search as SearchIcon,
   Send,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -592,13 +594,18 @@ function EmailRow({ email, active, onClick }) {
     >
       <button type="button" className="w-full text-left px-3 py-2" onClick={onClick}>
         <div className="flex items-center gap-2 min-w-0">
-          {!email.isRead && (
+          {email.needsAttention ? (
+            <AlertTriangle
+              className="w-3 h-3 text-amber-400 shrink-0"
+              aria-label={email.attentionReason || "needs attention"}
+            />
+          ) : !email.isRead ? (
             <span
               className="w-1.5 h-1.5 rounded-full bg-brand shrink-0"
               role="status"
               aria-label="unread"
             />
-          )}
+          ) : null}
           <span
             className={`text-[13px] truncate ${email.isRead ? "text-ink-subtle" : "text-ink font-medium"}`}
           >
@@ -625,7 +632,7 @@ function EmailRow({ email, active, onClick }) {
             </Badge>
           )}
           <span className="text-[11px] text-ink-tertiary truncate">
-            {(email.bodyPlain || "").slice(0, 90)}
+            {email.summary?.trim() || (email.bodyPlain || "").slice(0, 90)}
           </span>
         </div>
       </button>
@@ -825,6 +832,40 @@ function EmailReader({ detail, onPutAside, onMarkedUnread, onSelectEmail }) {
           </div>
         </div>
       </header>
+      {(detail.summary?.trim() || detail.needsAttention) && (
+        <div
+          className={`px-6 py-3 border-b border-hairline ${
+            detail.needsAttention ? "bg-amber-500/5" : "bg-surface-1/40"
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            {detail.needsAttention ? (
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5 text-ink-tertiary mt-0.5 shrink-0" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-wide text-ink-tertiary">
+                  {detail.needsAttention ? "Needs attention" : "Summary"}
+                </span>
+                {detail.needsAttention && detail.attentionReason && (
+                  <Badge variant="muted" className="text-[10px] bg-amber-500/10 text-amber-200">
+                    {detail.attentionReason}
+                  </Badge>
+                )}
+              </div>
+              {detail.summary?.trim() ? (
+                <p className="text-[13px] text-ink-muted mt-1 leading-snug">{detail.summary}</p>
+              ) : (
+                <p className="text-[12px] text-ink-tertiary mt-1 italic">
+                  No summary yet — Ollama may still be working through this one.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {thread.length > 1 && (
         <div className="px-6 py-2 border-b border-hairline bg-surface-1/40">
           <button
