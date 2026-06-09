@@ -19,7 +19,7 @@ export default function ScreenerView({ accounts }) {
   }, [refresh]);
 
   if (accounts.length === 0) {
-    return <p className="text-sm text-zinc-500 py-12 text-center">No accounts.</p>;
+    return <p className="text-sm text-ink-subtle py-12 text-center">No accounts.</p>;
   }
 
   return (
@@ -28,22 +28,22 @@ export default function ScreenerView({ accounts }) {
         const rows = byAccount[a.id] ?? [];
         return (
           <section key={a.id}>
-            <h3 className="text-sm font-medium text-zinc-300 mb-2">
+            <h3 className="text-sm font-medium text-ink-muted mb-2">
               {a.emailAddress}
-              <span className="ml-2 text-zinc-500">({rows.length} pending)</span>
+              <span className="ml-2 text-ink-subtle">({rows.length} pending)</span>
             </h3>
             {rows.length === 0 ? (
-              <p className="text-xs text-zinc-600">All clear.</p>
+              <p className="text-xs text-ink-tertiary">All clear.</p>
             ) : (
               <ul className="space-y-2">
                 {rows.map((r) => (
                   <li
                     key={r.senderId}
-                    className="p-3 rounded border border-zinc-800 bg-zinc-900 flex items-center gap-3"
+                    className="p-3 rounded border border-hairline bg-surface-1 flex items-center gap-3"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm text-zinc-100 truncate">{r.address}</div>
-                      <div className="text-xs text-zinc-500 truncate">
+                      <div className="text-sm text-ink truncate">{r.address}</div>
+                      <div className="text-xs text-ink-subtle truncate">
                         first seen via "{r.subject}"
                       </div>
                     </div>
@@ -53,7 +53,7 @@ export default function ScreenerView({ accounts }) {
                         await Triage.ApproveSender(r.senderId);
                         refresh();
                       }}
-                      className="px-2 py-1 text-xs rounded bg-emerald-900 hover:bg-emerald-800 text-emerald-100"
+                      className="px-2 py-1 text-xs rounded bg-success/15 hover:bg-brand/80 text-success"
                     >
                       Approve
                     </button>
@@ -63,7 +63,7 @@ export default function ScreenerView({ accounts }) {
                         await Triage.BlockSender(r.senderId);
                         refresh();
                       }}
-                      className="px-2 py-1 text-xs rounded bg-rose-900 hover:bg-rose-800 text-rose-100"
+                      className="px-2 py-1 text-xs rounded bg-danger/15 hover:bg-danger/25 text-danger"
                     >
                       Block
                     </button>

@@ -1,7 +1,23 @@
+import {
+  AtSign,
+  Bell,
+  Cog,
+  Filter,
+  Inbox as InboxIcon,
+  LoaderCircle,
+  PauseCircle,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Tag,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Accounts, Keychain, Ollama, Workspaces } from "./api";
-import StatusBar from "./components/StatusBar";
-import TabBar from "./components/TabBar";
+import { Accounts, GmailOAuth, Keychain, MSOAuth, Ollama, Workspaces } from "./api";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Separator } from "./components/ui/separator";
 import CategoriesView from "./views/CategoriesView";
 import FiltersView from "./views/FiltersView";
 import InboxView from "./views/InboxView";
@@ -9,22 +25,23 @@ import PutAsideView from "./views/PutAsideView";
 import ScreenerView from "./views/ScreenerView";
 import SettingsView from "./views/SettingsView";
 
-const TABS = [
-  { id: "inbox", label: "Inbox" },
-  { id: "put-aside", label: "Put Aside" },
-  { id: "screener", label: "Screener" },
-  { id: "filters", label: "Filters" },
-  { id: "categories", label: "Categories" },
-  { id: "settings", label: "Settings" },
+const NAV = [
+  { id: "inbox", label: "Inbox", icon: InboxIcon },
+  { id: "put-aside", label: "Put aside", icon: PauseCircle },
+  { id: "screener", label: "Screener", icon: Users },
+  { id: "filters", label: "Filters", icon: Filter },
+  { id: "categories", label: "Categories", icon: Tag },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState("inbox");
+  const [nav, setNav] = useState("inbox");
   const [workspaces, setWorkspaces] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(null);
   const [ollamaStatus, setOllamaStatus] = useState({ running: false });
   const [keychainOk, setKeychainOk] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const refreshWorkspaces = useCallback(async () => {
     const ws = await Workspaces.List();
@@ -55,58 +72,268 @@ export default function App() {
     [accounts, activeWorkspace],
   );
 
+  const syncAll = useCallback(async () => {
+    if (!activeAccounts.length) return;
+    setSyncing(true);
+    try {
+      await Promise.all(
+        activeAccounts.map(async (a) => {
+          if (a.authKind === "gmail_oauth") await GmailOAuth.SyncNow(a.id).catch(() => {});
+          if (a.authKind === "ms_oauth") await MSOAuth.Sync?.(a.id).catch(() => {});
+          // IMAP sync is driven by the scheduler; no manual hook yet.
+        }),
+      );
+    } finally {
+      setSyncing(false);
+    }
+  }, [activeAccounts]);
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <StatusBar ollama={ollamaStatus} keychainOk={keychainOk} />
-      <TabBar tabs={TABS} active={tab} onChange={setTab} />
+    <div className="min-h-screen flex flex-col bg-canvas text-ink">
+      <TopBar
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        onPick={setActiveWorkspaceId}
+        ollama={ollamaStatus}
+        keychainOk={keychainOk}
+        syncing={syncing}
+        onSync={syncAll}
+        onSettings={() => setShowSettings(true)}
+      />
 
-      {tab !== "settings" && workspaces.length > 0 && (
-        <WorkspacePicker
-          workspaces={workspaces}
-          activeId={activeWorkspaceId}
-          onPick={setActiveWorkspaceId}
-        />
-      )}
-
-      <main className="px-6 py-4">
-        {tab === "inbox" && <InboxView workspace={activeWorkspace} accounts={activeAccounts} />}
-        {tab === "put-aside" && <PutAsideView workspace={activeWorkspace} />}
-        {tab === "screener" && <ScreenerView accounts={activeAccounts} />}
-        {tab === "filters" && <FiltersView accounts={activeAccounts} />}
-        {tab === "categories" && (
-          <CategoriesView workspace={activeWorkspace} accounts={activeAccounts} />
-        )}
-        {tab === "settings" && (
-          <SettingsView
-            workspaces={workspaces}
-            accounts={accounts}
-            ollamaStatus={ollamaStatus}
-            onWorkspacesChanged={refreshWorkspaces}
-            onAccountsChanged={refreshAccounts}
+      {showSettings ? (
+        <main className="flex-1 overflow-auto px-8 py-6">
+          <div className="max-w-3xl mx-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h1 className="display text-2xl">Settings</h1>
+              <Button variant="secondary" onClick={() => setShowSettings(false)}>
+                Done
+              </Button>
+            </div>
+            <SettingsView
+              workspaces={workspaces}
+              accounts={accounts}
+              ollamaStatus={ollamaStatus}
+              onWorkspacesChanged={refreshWorkspaces}
+              onAccountsChanged={refreshAccounts}
+            />
+          </div>
+        </main>
+      ) : (
+        <div className="flex-1 flex min-h-0">
+          <SideRail
+            nav={nav}
+            onNav={setNav}
+            accounts={activeAccounts}
+            workspace={activeWorkspace}
           />
-        )}
-      </main>
+          <main className="flex-1 min-w-0 flex flex-col bg-canvas">
+            {nav === "inbox" && <InboxView workspace={activeWorkspace} accounts={activeAccounts} />}
+            {nav === "put-aside" && (
+              <PaneShell title="Put aside" subtitle="Saved for later, out of the main flow.">
+                <PutAsideView workspace={activeWorkspace} />
+              </PaneShell>
+            )}
+            {nav === "screener" && (
+              <PaneShell title="Screener" subtitle="First-time senders waiting on a decision.">
+                <ScreenerView accounts={activeAccounts} />
+              </PaneShell>
+            )}
+            {nav === "filters" && (
+              <PaneShell title="Filters" subtitle="Block rules, applied at ingest time.">
+                <FiltersView accounts={activeAccounts} />
+              </PaneShell>
+            )}
+            {nav === "categories" && (
+              <PaneShell title="Categories" subtitle="Promotions, social, updates, newsletters.">
+                <CategoriesView workspace={activeWorkspace} accounts={activeAccounts} />
+              </PaneShell>
+            )}
+          </main>
+        </div>
+      )}
     </div>
   );
 }
 
-function WorkspacePicker({ workspaces, activeId, onPick }) {
+function TopBar({
+  workspaces,
+  activeWorkspaceId,
+  onPick,
+  ollama,
+  keychainOk,
+  syncing,
+  onSync,
+  onSettings,
+}) {
   return (
-    <div className="flex gap-2 px-6 py-3 border-b border-zinc-800 overflow-x-auto">
-      {workspaces.map((w) => (
-        <button
-          key={w.id}
-          type="button"
-          onClick={() => onPick(w.id)}
-          className={`px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${
-            w.id === activeId
-              ? "bg-zinc-100 text-zinc-900"
-              : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-          }`}
+    <header className="flex items-center gap-3 px-4 h-14 border-b border-hairline bg-canvas">
+      <div className="flex items-center gap-2 pr-3">
+        <span className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-brand/15 text-brand">
+          <Sparkles className="w-4 h-4" />
+        </span>
+        <span className="display text-[15px] font-medium tracking-[-0.01em]">miniclaw</span>
+      </div>
+      <Separator orientation="vertical" className="h-6" />
+      <WorkspaceStrip workspaces={workspaces} activeId={activeWorkspaceId} onPick={onPick} />
+      <div className="ml-auto flex items-center gap-2">
+        <StatusPill
+          ok={ollama?.running}
+          label={ollama?.running ? "Ollama online" : "Ollama offline"}
+        />
+        <StatusPill ok={keychainOk} label={keychainOk ? "Keychain ready" : "Keychain blocked"} />
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onSync}
+          disabled={syncing}
+          aria-label="Sync now"
         >
-          {w.emoji} {w.name}
-        </button>
-      ))}
+          {syncing ? (
+            <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="w-3.5 h-3.5" />
+          )}
+          Sync
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onSettings} aria-label="Settings">
+          <Cog className="w-4 h-4" />
+        </Button>
+      </div>
+    </header>
+  );
+}
+
+function WorkspaceStrip({ workspaces, activeId, onPick }) {
+  if (!workspaces.length) return <div className="text-xs text-ink-subtle">No workspaces yet.</div>;
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto">
+      {workspaces.map((w) => {
+        const active = w.id === activeId;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => onPick(w.id)}
+            className={
+              "h-7 px-2.5 rounded-full text-[12px] inline-flex items-center gap-1.5 whitespace-nowrap transition-colors " +
+              (active
+                ? "bg-surface-2 text-ink border border-hairline-strong"
+                : "text-ink-subtle hover:bg-surface-1")
+            }
+          >
+            {w.emoji ? <span aria-hidden>{w.emoji}</span> : null}
+            <span>{w.name}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
+
+function StatusPill({ ok, label }) {
+  return (
+    <span className="hidden md:inline-flex items-center gap-1.5 text-[11px] text-ink-subtle">
+      <span className={`w-1.5 h-1.5 rounded-full ${ok ? "bg-success" : "bg-danger"}`} aria-hidden />
+      {label}
+    </span>
+  );
+}
+
+function SideRail({ nav, onNav, accounts, workspace }) {
+  return (
+    <aside className="w-60 shrink-0 border-r border-hairline bg-canvas flex flex-col">
+      <div className="px-3 pt-4 pb-2">
+        <button
+          type="button"
+          className="w-full inline-flex items-center gap-2 h-8 px-2 rounded-md text-[12px] text-ink-subtle bg-surface-1 border border-hairline hover:bg-surface-2"
+        >
+          <Search className="w-3.5 h-3.5" />
+          <span>Search</span>
+          <span className="ml-auto text-[10px] text-ink-tertiary">⌘K</span>
+        </button>
+      </div>
+
+      <nav className="px-2 pb-2">
+        {NAV.map(({ id, label, icon: Icon }) => {
+          const active = nav === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onNav(id)}
+              className={
+                "w-full h-8 px-2 rounded-md inline-flex items-center gap-2 text-[13px] transition-colors " +
+                (active
+                  ? "bg-surface-1 text-ink"
+                  : "text-ink-subtle hover:bg-surface-1 hover:text-ink")
+              }
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          );
+        })}
+      </nav>
+
+      <Separator className="mx-3 my-2" />
+
+      <div className="px-3 pb-2">
+        <div className="text-[10px] uppercase tracking-[0.08em] text-ink-tertiary mb-2 px-2">
+          {workspace ? `${workspace.name} accounts` : "Accounts"}
+        </div>
+        <ul className="space-y-0.5">
+          {accounts.length === 0 && (
+            <li className="text-[12px] text-ink-tertiary px-2 py-1">No accounts yet.</li>
+          )}
+          {accounts.map((a) => (
+            <li
+              key={a.id}
+              className="px-2 py-1.5 rounded-md hover:bg-surface-1 text-[12px] text-ink-muted flex items-center gap-2"
+              title={a.emailAddress}
+            >
+              <AuthGlyph kind={a.authKind} />
+              <span className="truncate">{a.emailAddress}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-auto px-3 py-3 border-t border-hairline">
+        <div className="flex items-center gap-2 text-[11px] text-ink-tertiary">
+          <ShieldCheck className="w-3.5 h-3.5" />
+          local-only · keychain-backed
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function AuthGlyph({ kind }) {
+  if (kind === "gmail_oauth") {
+    return <AtSign className="w-3 h-3 text-brand" aria-label="Gmail" />;
+  }
+  if (kind === "ms_oauth") {
+    return <AtSign className="w-3 h-3 text-brand-secure" aria-label="Microsoft" />;
+  }
+  return <AtSign className="w-3 h-3 text-ink-tertiary" aria-label="IMAP" />;
+}
+
+function PaneShell({ title, subtitle, children, action }) {
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-end justify-between px-6 pt-5 pb-4 border-b border-hairline">
+        <div>
+          <h2 className="display text-lg leading-none tracking-[-0.015em]">{title}</h2>
+          {subtitle && <p className="text-[12px] text-ink-subtle mt-1">{subtitle}</p>}
+        </div>
+        {action}
+      </div>
+      <div className="flex-1 overflow-auto px-6 py-5">{children}</div>
+    </div>
+  );
+}
+
+// Bell + Badge are imported but only used in InboxView. Re-export so the
+// rest of the tree can share the icon set without re-importing lucide.
+export { Badge, Bell };

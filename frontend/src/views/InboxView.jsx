@@ -1,148 +1,412 @@
-import { useCallback, useEffect, useState } from "react";
-import { Inbox, SMTPSender, Triage } from "../api";
+import {
+  ChevronDown,
+  CornerUpLeft,
+  Image as ImageIcon,
+  ImageOff,
+  Inbox,
+  LoaderCircle,
+  PauseCircle,
+  PlayCircle,
+  RefreshCw,
+  Send,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GmailOAuth, Inbox as InboxApi, SMTPSender, Triage } from "../api";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { ScrollArea } from "../components/ui/scroll-area";
+import { Separator } from "../components/ui/separator";
+import { Textarea } from "../components/ui/textarea";
+
+const PAGE = 80;
 
 export default function InboxView({ workspace, accounts }) {
   const [emails, setEmails] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [reachedEnd, setReachedEnd] = useState(false);
+
+  const oldestReceivedAt = useMemo(
+    () => (emails.length ? emails[emails.length - 1].receivedAt : ""),
+    [emails],
+  );
 
   const refresh = useCallback(async () => {
     if (!workspace) {
       setEmails([]);
       return;
     }
-    setEmails(await Inbox.ListByWorkspace(workspace.id, 100));
+    const rows = await InboxApi.ListByWorkspace(workspace.id, PAGE);
+    setEmails(rows);
+    setReachedEnd(rows.length < PAGE);
+    if (!rows.length) {
+      setSelectedId(null);
+      setDetail(null);
+    }
   }, [workspace]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (selectedId == null) {
+      setDetail(null);
+      return;
+    }
+    InboxApi.Get(selectedId)
+      .then(setDetail)
+      .catch(() => setDetail(null));
+  }, [selectedId]);
+
+  const loadOlder = useCallback(async () => {
+    if (!workspace || !oldestReceivedAt || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const more = await InboxApi.ListOlderByWorkspace(workspace.id, oldestReceivedAt, PAGE);
+      if (more.length === 0) {
+        setReachedEnd(true);
+      } else {
+        setEmails((prev) => [...prev, ...more]);
+        if (more.length < PAGE) setReachedEnd(true);
+      }
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [workspace, oldestReceivedAt, loadingOlder]);
+
+  const backfillFromServer = useCallback(async () => {
+    const gmailAccounts = accounts.filter((a) => a.authKind === "gmail_oauth");
+    if (!gmailAccounts.length || backfilling) return;
+    const before = oldestReceivedAt
+      ? oldestReceivedAt.slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+    setBackfilling(true);
+    try {
+      await Promise.all(
+        gmailAccounts.map((a) => GmailOAuth.BackfillBefore(a.id, before, 200).catch(() => 0)),
+      );
+      await refresh();
+    } finally {
+      setBackfilling(false);
+    }
+  }, [accounts, oldestReceivedAt, backfilling, refresh]);
+
   if (!workspace) {
-    return <Empty>Pick a workspace to see its inbox.</Empty>;
-  }
-  if (accounts.length === 0) {
     return (
-      <Empty>
-        No accounts in {workspace.name}. Add one from{" "}
-        <span className="text-emerald-400">Settings</span>.
+      <Empty icon={Inbox} title="Pick a workspace">
+        Use the workspace strip up top to choose one.
       </Empty>
     );
   }
-  if (emails.length === 0) {
-    return <Empty>Inbox is empty. Sync runs on cadence — check back soon.</Empty>;
+  if (accounts.length === 0) {
+    return (
+      <Empty icon={Inbox} title={`No accounts in ${workspace.name}`}>
+        Open Settings (top-right gear) to connect a Gmail or IMAP account.
+      </Empty>
+    );
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4">
-      <ul className="space-y-1.5 overflow-y-auto max-h-[70vh]">
-        {emails.map((e) => (
-          <EmailRow
-            key={e.id}
-            email={e}
-            active={selected?.id === e.id}
-            onClick={async () => {
-              setSelected(e);
-              if (!e.isRead) {
-                await Inbox.MarkRead(e.id);
-                refresh();
-              }
-            }}
-            onPutAside={async () => {
-              await Triage.TogglePutAside(e.id);
-              refresh();
-            }}
-          />
-        ))}
-      </ul>
-      <EmailDetail email={selected} />
+    <div className="flex h-full min-h-0">
+      <section className="w-[420px] shrink-0 border-r border-hairline flex flex-col">
+        <div className="h-14 px-4 flex items-center gap-2 border-b border-hairline">
+          <h2 className="display text-sm font-medium tracking-[-0.01em]">{workspace.name}</h2>
+          <Badge variant="muted">{emails.length}</Badge>
+          <div className="ml-auto">
+            <Button size="xs" variant="ghost" onClick={refresh} aria-label="Refresh list">
+              <RefreshCw className="w-3 h-3" />
+            </Button>
+          </div>
+        </div>
+        <ScrollArea className="flex-1">
+          <ul className="p-1.5">
+            {emails.map((e) => (
+              <EmailRow
+                key={e.id}
+                email={e}
+                active={selectedId === e.id}
+                onClick={() => {
+                  setSelectedId(e.id);
+                  if (!e.isRead) {
+                    InboxApi.MarkRead(e.id).then(() => {
+                      setEmails((prev) =>
+                        prev.map((row) => (row.id === e.id ? { ...row, isRead: true } : row)),
+                      );
+                    });
+                  }
+                }}
+              />
+            ))}
+          </ul>
+          <div className="px-3 pb-4 pt-1 flex flex-col gap-2 items-stretch">
+            {!reachedEnd && (
+              <Button size="sm" variant="secondary" onClick={loadOlder} disabled={loadingOlder}>
+                {loadingOlder ? (
+                  <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+                {loadingOlder ? "Loading…" : "Load older messages"}
+              </Button>
+            )}
+            {accounts.some((a) => a.authKind === "gmail_oauth") && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={backfillFromServer}
+                disabled={backfilling}
+                title="Pull the next 200 messages before the oldest one shown, straight from Gmail"
+              >
+                {backfilling ? (
+                  <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+                {backfilling ? "Fetching from Gmail…" : "Fetch 200 older from Gmail"}
+              </Button>
+            )}
+            {reachedEnd && (
+              <p className="text-[11px] text-ink-tertiary text-center">
+                You've reached the oldest cached message.
+              </p>
+            )}
+          </div>
+        </ScrollArea>
+      </section>
+      <section className="flex-1 min-w-0 flex flex-col">
+        <EmailReader detail={detail} onPutAside={refresh} />
+      </section>
     </div>
   );
 }
 
-function EmailRow({ email, active, onClick, onPutAside }) {
+function EmailRow({ email, active, onClick }) {
   const who = email.fromName || email.fromAddress;
   return (
     <li
-      className={`p-3 rounded border cursor-pointer ${
-        active ? "bg-zinc-800 border-zinc-700" : "bg-zinc-900 border-zinc-800 hover:border-zinc-700"
-      }`}
+      className={
+        "group rounded-md cursor-pointer transition-colors mb-0.5 " +
+        (active
+          ? "bg-surface-1 border border-hairline-strong"
+          : "border border-transparent hover:bg-surface-1")
+      }
     >
-      <button type="button" className="w-full text-left" onClick={onClick}>
-        <div className="flex items-baseline justify-between gap-2">
+      <button type="button" className="w-full text-left px-3 py-2" onClick={onClick}>
+        <div className="flex items-center gap-2 min-w-0">
+          {!email.isRead && (
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-brand shrink-0"
+              role="status"
+              aria-label="unread"
+            />
+          )}
           <span
-            className={`text-sm truncate ${
-              email.isRead ? "text-zinc-400" : "text-zinc-100 font-medium"
-            }`}
+            className={`text-[13px] truncate ${email.isRead ? "text-ink-subtle" : "text-ink font-medium"}`}
           >
             {who}
           </span>
-          {email.category && (
-            <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-              {email.category}
-            </span>
-          )}
+          <span className="ml-auto text-[11px] text-ink-tertiary shrink-0">
+            {formatStamp(email.receivedAt)}
+          </span>
         </div>
-        <div className="text-sm text-zinc-300 truncate">{email.subject}</div>
-        <div className="text-xs text-zinc-500 truncate">{email.bodyPlain}</div>
-      </button>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onPutAside();
-        }}
-        className="mt-1 text-[11px] text-zinc-500 hover:text-zinc-300"
-      >
-        {email.isPutAside ? "↩ unstash" : "→ put aside"}
+        <div
+          className={`text-[13px] truncate mt-0.5 ${email.isRead ? "text-ink-subtle" : "text-ink-muted"}`}
+        >
+          {email.subject || <span className="italic text-ink-tertiary">(no subject)</span>}
+        </div>
+        <div className="flex items-center gap-1.5 mt-1.5">
+          {email.category && (
+            <Badge variant="outline" className="text-[10px]">
+              {email.category}
+            </Badge>
+          )}
+          {email.isPutAside && (
+            <Badge variant="muted" className="text-[10px]">
+              <PauseCircle className="w-2.5 h-2.5" /> aside
+            </Badge>
+          )}
+          <span className="text-[11px] text-ink-tertiary truncate">
+            {(email.bodyPlain || "").slice(0, 90)}
+          </span>
+        </div>
       </button>
     </li>
   );
 }
 
-function EmailDetail({ email }) {
+function EmailReader({ detail, onPutAside }) {
   const [replying, setReplying] = useState(false);
+  const [showImages, setShowImages] = useState(false);
 
-  if (!email) {
+  useEffect(() => {
+    setReplying(false);
+    setShowImages(false);
+  }, []);
+
+  if (!detail) {
     return (
-      <div className="text-zinc-500 text-sm flex items-center justify-center min-h-[40vh]">
-        Pick a message to read it.
+      <div className="flex-1 flex items-center justify-center text-ink-tertiary text-sm">
+        Select a message.
       </div>
     );
   }
-  return (
-    <article className="bg-zinc-900 border border-zinc-800 rounded p-4 max-h-[70vh] overflow-y-auto">
-      <div className="flex items-start justify-between gap-3 mb-1">
-        <h2 className="text-lg font-medium">{email.subject}</h2>
-        {!replying && (
-          <button
-            type="button"
-            onClick={() => setReplying(true)}
-            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 whitespace-nowrap"
-          >
-            Reply
-          </button>
-        )}
-      </div>
-      <div className="text-xs text-zinc-500 mb-4">
-        {email.fromName ? `${email.fromName} — ` : ""}
-        {email.fromAddress} · {email.receivedAt}
-      </div>
-      <pre className="whitespace-pre-wrap text-sm text-zinc-200 font-sans">{email.bodyPlain}</pre>
 
-      {replying && (
-        <ReplyComposer
-          email={email}
-          onClose={() => setReplying(false)}
-          onSent={() => setReplying(false)}
-        />
-      )}
-    </article>
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <header className="px-6 pt-5 pb-3 border-b border-hairline">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="display text-[20px] leading-tight tracking-[-0.015em]">
+              {detail.subject || <span className="text-ink-tertiary italic">(no subject)</span>}
+            </h1>
+            <div className="mt-1.5 text-[12px] text-ink-subtle flex flex-wrap gap-x-3 gap-y-0.5">
+              <span>
+                <span className="text-ink-muted">{detail.fromName || detail.fromAddress}</span>
+                {detail.fromName ? (
+                  <span className="text-ink-tertiary"> · {detail.fromAddress}</span>
+                ) : null}
+              </span>
+              <span>{formatStamp(detail.receivedAt, true)}</span>
+              {detail.to && <span>to {detail.to}</span>}
+              {detail.category && <Badge variant="outline">{detail.category}</Badge>}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowImages((v) => !v)}
+              title="Toggle remote image loading"
+            >
+              {showImages ? (
+                <ImageOff className="w-3.5 h-3.5" />
+              ) : (
+                <ImageIcon className="w-3.5 h-3.5" />
+              )}
+              {showImages ? "Hide images" : "Show images"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                await Triage.TogglePutAside(detail.id);
+                onPutAside?.();
+              }}
+            >
+              {detail.isPutAside ? (
+                <PlayCircle className="w-3.5 h-3.5" />
+              ) : (
+                <PauseCircle className="w-3.5 h-3.5" />
+              )}
+              {detail.isPutAside ? "Unstash" : "Put aside"}
+            </Button>
+            {!replying && (
+              <Button size="sm" onClick={() => setReplying(true)}>
+                <CornerUpLeft className="w-3.5 h-3.5" />
+                Reply
+              </Button>
+            )}
+          </div>
+        </div>
+      </header>
+      <ScrollArea className="flex-1 px-6 py-5">
+        <HtmlBody detail={detail} loadRemoteImages={showImages} />
+        {replying && (
+          <>
+            <Separator className="my-6" />
+            <ReplyComposer
+              email={detail}
+              onClose={() => setReplying(false)}
+              onSent={() => setReplying(false)}
+            />
+          </>
+        )}
+      </ScrollArea>
+    </div>
   );
+}
+
+function HtmlBody({ detail, loadRemoteImages }) {
+  const ref = useRef(null);
+  const srcDoc = useMemo(() => buildSrcDoc(detail, loadRemoteImages), [detail, loadRemoteImages]);
+
+  const onLoad = useCallback(() => {
+    const iframe = ref.current;
+    if (!iframe) return;
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      const h = doc.documentElement.scrollHeight || doc.body?.scrollHeight || 0;
+      iframe.style.height = `${Math.min(Math.max(h, 200), 4000)}px`;
+    } catch {
+      /* same-origin sandbox should let us read; if not, fall back to default height */
+    }
+  }, []);
+
+  if (!detail.bodyHtml || detail.bodyHtml.trim().length === 0) {
+    return (
+      <pre className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink-muted font-sans">
+        {detail.bodyPlain || "(empty body)"}
+      </pre>
+    );
+  }
+
+  return (
+    <iframe
+      ref={ref}
+      title="email body"
+      sandbox="allow-same-origin allow-popups"
+      srcDoc={srcDoc}
+      className="w-full block bg-white rounded-md border border-hairline"
+      style={{ height: "60vh", colorScheme: "light" }}
+      onLoad={onLoad}
+    />
+  );
+}
+
+// buildSrcDoc takes the raw HTML, strips <script>, optionally rewrites <img>
+// sources to about:blank to suppress remote tracking pixels, and wraps the
+// result with a sane base + body style.
+function buildSrcDoc(detail, loadRemoteImages) {
+  let html = detail.bodyHtml || "";
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, "");
+  html = html.replace(/\son\w+\s*=\s*"[^"]*"/gi, "");
+  html = html.replace(/\son\w+\s*=\s*'[^']*'/gi, "");
+  html = html.replace(/javascript:/gi, "blocked:");
+  if (!loadRemoteImages) {
+    html = html.replace(/<img\b([^>]*?)\bsrc\s*=\s*["']([^"']*)["']/gi, (_m, rest, src) => {
+      if (/^cid:/i.test(src)) return `<img${rest} data-cid="${src}" alt="(inline image)"`;
+      return `<img${rest} data-blocked-src="${src}" alt="(remote image)" style="display:inline-block;min-width:24px;min-height:24px;background:#e5e7eb;border:1px dashed #cbd5e1"`;
+    });
+  } else {
+    html = html.replace(/<img\b([^>]*?)\bsrc\s*=\s*["']cid:([^"']*)["']/gi, (_m, rest) => {
+      return `<img${rest} alt="(inline image — not stored)"`;
+    });
+  }
+  return `<!doctype html>
+<html><head><base target="_blank">
+<style>
+  html,body { margin:0; padding:16px; background:#ffffff; color:#111827; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; font-size:14px; line-height:1.55; }
+  a { color: #5e6ad2; }
+  img { max-width: 100%; height: auto; }
+  table { max-width: 100%; }
+  blockquote { border-left: 3px solid #e5e7eb; padding-left: 12px; color: #4b5563; margin: 0 0 12px 0; }
+</style></head>
+<body>${html}</body></html>`;
 }
 
 function ReplyComposer({ email, onClose, onSent }) {
   const [body, setBody] = useState(
-    `\n\nOn ${email.receivedAt}, ${email.fromName || email.fromAddress} wrote:\n> ${email.bodyPlain.split("\n").join("\n> ")}`,
+    "\n\nOn " +
+      email.receivedAt +
+      ", " +
+      (email.fromName || email.fromAddress) +
+      " wrote:\n> " +
+      (email.bodyPlain || "").split("\n").join("\n> "),
   );
   const [subject, setSubject] = useState(
     email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
@@ -169,39 +433,76 @@ function ReplyComposer({ email, onClose, onSent }) {
   }
 
   return (
-    <div className="mt-4 border border-zinc-700 rounded p-3 bg-zinc-950">
-      <div className="text-xs text-zinc-500 mb-2">
-        To: <span className="text-zinc-300">{email.fromAddress}</span>
+    <div className="rounded-lg border border-hairline bg-surface-1 p-4">
+      <div className="text-[11px] text-ink-subtle mb-2">
+        Replying to <span className="text-ink-muted">{email.fromAddress}</span>
       </div>
-      <input
+      <Input
         value={subject}
         onChange={(e) => setSubject(e.target.value)}
-        className="w-full px-2 py-1.5 mb-2 bg-zinc-900 border border-zinc-700 rounded text-sm"
+        className="mb-2"
+        aria-label="Subject"
       />
-      <textarea
+      <Textarea
         rows={10}
         value={body}
         onChange={(e) => setBody(e.target.value)}
-        className="w-full px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm font-mono"
+        className="font-mono text-[13px]"
+        aria-label="Body"
       />
-      {err && <p className="mt-2 text-xs text-rose-400">{err}</p>}
-      <div className="flex gap-2 mt-2">
-        <button
-          type="button"
-          onClick={send}
-          disabled={busy}
-          className="px-3 py-1.5 rounded bg-emerald-700 text-sm disabled:opacity-50"
-        >
+      {err && <p className="mt-2 text-[12px] text-danger">{err}</p>}
+      <div className="flex gap-2 mt-3">
+        <Button onClick={send} disabled={busy} size="sm">
+          {busy ? (
+            <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Send className="w-3.5 h-3.5" />
+          )}
           {busy ? "Sending…" : "Send"}
-        </button>
-        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-zinc-800 text-sm">
+        </Button>
+        <Button onClick={onClose} variant="secondary" size="sm">
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
-function Empty({ children }) {
-  return <div className="text-zinc-500 text-sm py-12 text-center">{children}</div>;
+function Empty({ icon: Icon, title, children }) {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="text-center max-w-xs">
+        <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-surface-1 border border-hairline mb-3">
+          <Icon className="w-4 h-4 text-ink-subtle" />
+        </div>
+        <h3 className="display text-base mb-1">{title}</h3>
+        <p className="text-[13px] text-ink-subtle">{children}</p>
+      </div>
+    </div>
+  );
+}
+
+function formatStamp(iso, withTime = false) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay && !withTime) {
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  if (withTime) {
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
 }

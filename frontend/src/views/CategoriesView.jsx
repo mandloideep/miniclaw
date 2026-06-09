@@ -35,7 +35,7 @@ export default function CategoriesView({ workspace }) {
             type="button"
             onClick={() => setActive(c)}
             className={`px-3 py-1 rounded text-xs ${
-              active === c ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800 text-zinc-300"
+              active === c ? "bg-ink text-canvas" : "bg-surface-2 text-ink-muted"
             }`}
           >
             {c} ({grouped[c].length})
@@ -44,15 +44,15 @@ export default function CategoriesView({ workspace }) {
       </div>
       <ul className="space-y-1.5">
         {grouped[active].map((e) => (
-          <li key={e.id} className="p-3 rounded border border-zinc-800 bg-zinc-900">
-            <div className="text-sm text-zinc-100 truncate">
+          <li key={e.id} className="p-3 rounded border border-hairline bg-surface-1">
+            <div className="text-sm text-ink truncate">
               {e.fromName || e.fromAddress} — {e.subject}
             </div>
-            <div className="text-xs text-zinc-500">{e.receivedAt}</div>
+            <div className="text-xs text-ink-subtle">{e.receivedAt}</div>
           </li>
         ))}
         {grouped[active].length === 0 && (
-          <li className="text-xs text-zinc-500">No {active} yet.</li>
+          <li className="text-xs text-ink-subtle">No {active} yet.</li>
         )}
       </ul>
     </div>

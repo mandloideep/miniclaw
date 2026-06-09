@@ -20,7 +20,7 @@ export default function SettingsView({
 
 function Section({ title, children }) {
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+    <section className="bg-surface-1 border border-hairline rounded-lg p-4">
       <h2 className="text-base font-medium mb-3">{title}</h2>
       {children}
     </section>
@@ -35,7 +35,7 @@ function WorkspacesSection({ workspaces, onChange }) {
         {workspaces.map((w) => (
           <li
             key={w.id}
-            className="flex items-center gap-3 px-2 py-1.5 rounded border border-zinc-800"
+            className="flex items-center gap-3 px-2 py-1.5 rounded border border-hairline"
           >
             <span className="text-lg">{w.emoji}</span>
             <span className="flex-1">{w.name}</span>
@@ -46,7 +46,7 @@ function WorkspacesSection({ workspaces, onChange }) {
                 await Workspaces.Delete(w.id);
                 onChange();
               }}
-              className="text-xs text-zinc-500 hover:text-rose-400"
+              className="text-xs text-ink-subtle hover:text-danger"
             >
               delete
             </button>
@@ -67,15 +67,15 @@ function WorkspacesSection({ workspaces, onChange }) {
           placeholder="emoji"
           value={draft.emoji}
           onChange={(e) => setDraft({ ...draft, emoji: e.target.value })}
-          className="w-16 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+          className="w-16 px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
         />
         <input
           placeholder="workspace name"
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          className="flex-1 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+          className="flex-1 px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
         />
-        <button type="submit" className="px-3 py-1.5 rounded bg-emerald-700 text-sm">
+        <button type="submit" className="px-3 py-1.5 rounded bg-brand text-sm">
           Add
         </button>
       </form>
@@ -99,13 +99,13 @@ function AccountsSection({ workspaces, accounts, onChange }) {
           return (
             <li
               key={a.id}
-              className="px-3 py-2 border border-zinc-800 rounded flex justify-between items-start"
+              className="px-3 py-2 border border-hairline rounded flex justify-between items-start"
             >
               <div>
                 <div className="text-sm">
-                  {a.emailAddress} <span className="text-xs text-zinc-500">({a.authKind})</span>
+                  {a.emailAddress} <span className="text-xs text-ink-subtle">({a.authKind})</span>
                 </div>
-                <div className="text-xs text-zinc-500">
+                <div className="text-xs text-ink-subtle">
                   {ws ? `${ws.emoji} ${ws.name}` : "—"} ·{" "}
                   {a.lastSyncedAt ? `synced ${a.lastSyncedAt}` : "never synced"} · model:{" "}
                   {a.ollamaModel || "(default)"}
@@ -118,7 +118,7 @@ function AccountsSection({ workspaces, accounts, onChange }) {
                   await Accounts.Delete(a.id);
                   onChange();
                 }}
-                className="text-xs text-zinc-500 hover:text-rose-400"
+                className="text-xs text-ink-subtle hover:text-danger"
               >
                 remove
               </button>
@@ -140,7 +140,7 @@ function AccountsSection({ workspaces, accounts, onChange }) {
         <button
           type="button"
           onClick={() => setShowAdd(true)}
-          className="px-3 py-1.5 rounded bg-zinc-800 text-sm hover:bg-zinc-700"
+          className="px-3 py-1.5 rounded bg-surface-2 text-sm hover:bg-surface-3"
         >
           + Add account
         </button>
@@ -207,7 +207,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-2 border border-zinc-800 rounded p-3">
+    <form onSubmit={submit} className="space-y-2 border border-hairline rounded p-3">
       <div className="flex gap-2">
         {["imap", "gmail_oauth", "ms_oauth"].map((k) => (
           <button
@@ -215,7 +215,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
             type="button"
             onClick={() => setKind(k)}
             className={`px-3 py-1 text-xs rounded ${
-              kind === k ? "bg-zinc-100 text-zinc-900" : "bg-zinc-800"
+              kind === k ? "bg-ink text-canvas" : "bg-surface-2"
             }`}
           >
             {k === "imap" ? "IMAP/SMTP" : k === "gmail_oauth" ? "Gmail OAuth" : "Microsoft OAuth"}
@@ -226,7 +226,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
       <select
         value={form.workspaceId}
         onChange={(e) => setForm({ ...form, workspaceId: Number(e.target.value) })}
-        className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+        className="w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
       >
         {workspaces.map((w) => (
           <option key={w.id} value={w.id}>
@@ -239,7 +239,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
         placeholder="display name"
         value={form.displayName}
         onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-        className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+        className="w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
       />
 
       {kind === "imap" && (
@@ -248,34 +248,34 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
             placeholder="email address"
             value={form.emailAddress}
             onChange={(e) => setForm({ ...form, emailAddress: e.target.value })}
-            className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+            className="w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
           />
           <div className="grid grid-cols-2 gap-2">
             <input
               placeholder="imap host"
               value={form.imapHost}
               onChange={(e) => setForm({ ...form, imapHost: e.target.value })}
-              className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+              className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
             />
             <input
               placeholder="imap port"
               type="number"
               value={form.imapPort}
               onChange={(e) => setForm({ ...form, imapPort: e.target.value })}
-              className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+              className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
             />
             <input
               placeholder="smtp host"
               value={form.smtpHost}
               onChange={(e) => setForm({ ...form, smtpHost: e.target.value })}
-              className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+              className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
             />
             <input
               placeholder="smtp port"
               type="number"
               value={form.smtpPort}
               onChange={(e) => setForm({ ...form, smtpPort: e.target.value })}
-              className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+              className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
             />
           </div>
           <input
@@ -283,7 +283,7 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
             placeholder="app password"
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
-            className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+            className="w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
           />
         </>
       )}
@@ -293,12 +293,12 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
           placeholder="fetch since (YYYY-MM-DD, optional)"
           value={form.fetchSince}
           onChange={(e) => setForm({ ...form, fetchSince: e.target.value })}
-          className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+          className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
         />
         <select
           value={form.ollamaModel}
           onChange={(e) => setForm({ ...form, ollamaModel: e.target.value })}
-          className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+          className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
         >
           <option value="">(default model)</option>
           {models.map((m) => (
@@ -309,12 +309,12 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
         </select>
       </div>
 
-      {err && <p className="text-xs text-rose-400">{err}</p>}
+      {err && <p className="text-xs text-danger">{err}</p>}
       <div className="flex gap-2">
         <button
           type="submit"
           disabled={busy}
-          className="px-3 py-1.5 rounded bg-emerald-700 text-sm disabled:opacity-50"
+          className="px-3 py-1.5 rounded bg-brand text-sm disabled:opacity-50"
         >
           {busy
             ? "Working…"
@@ -324,7 +324,11 @@ function AddAccountForm({ workspaces, models, onClose, onAdded }) {
                 ? "Sign in with Google"
                 : "Sign in with Microsoft"}
         </button>
-        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-zinc-800 text-sm">
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-1.5 rounded bg-surface-2 text-sm"
+        >
           Cancel
         </button>
       </div>
@@ -342,21 +346,23 @@ function OllamaSection({ status }) {
   return (
     <Section title="Ollama">
       {!status?.running ? (
-        <p className="text-sm text-rose-400">
+        <p className="text-sm text-danger">
           Ollama is not reachable at http://localhost:11434 — start it (`ollama serve`) and reload.
         </p>
       ) : (
         <>
-          <p className="text-xs text-zinc-500 mb-2">Running v{status.version}. Available models:</p>
+          <p className="text-xs text-ink-subtle mb-2">
+            Running v{status.version}. Available models:
+          </p>
           <ul className="text-sm">
             {models.length === 0 && (
-              <li className="text-xs text-zinc-500">
+              <li className="text-xs text-ink-subtle">
                 No models installed yet. `ollama pull llama3.2:3b` is a good first pick.
               </li>
             )}
             {models.map((m) => (
               <li key={m.name} className="py-0.5">
-                {m.name} <span className="text-xs text-zinc-500">{m.parameterSize}</span>
+                {m.name} <span className="text-xs text-ink-subtle">{m.parameterSize}</span>
               </li>
             ))}
           </ul>
@@ -386,35 +392,35 @@ function TelegramSection({ accounts, workspaces }) {
   return (
     <Section title="Telegram digest">
       <div className="space-y-2 mb-3">
-        <label className="text-xs text-zinc-500 block">
+        <label className="text-xs text-ink-subtle block">
           Bot token (from @BotFather)
           <input
             type="password"
             value={settings.botToken}
             onChange={(e) => setSettings({ ...settings, botToken: e.target.value })}
             onBlur={() => Telegram.SetBotToken(settings.botToken)}
-            className="mt-1 w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+            className="mt-1 w-full px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
           />
         </label>
-        <label className="text-xs text-zinc-500 block">
+        <label className="text-xs text-ink-subtle block">
           Digest time (HH:MM)
           <input
             value={settings.digestTime}
             onChange={(e) => setSettings({ ...settings, digestTime: e.target.value })}
             onBlur={() => Telegram.SetDigestTime(settings.digestTime).catch(() => {})}
-            className="mt-1 w-32 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+            className="mt-1 w-32 px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
           />
         </label>
         <button
           type="button"
           onClick={() => Digest.RunNow()}
-          className="ml-2 px-3 py-1.5 rounded bg-zinc-800 text-xs hover:bg-zinc-700"
+          className="ml-2 px-3 py-1.5 rounded bg-surface-2 text-xs hover:bg-surface-3"
         >
           Send test digest now
         </button>
       </div>
 
-      <h3 className="text-xs text-zinc-500 uppercase mt-4 mb-1">Recipients</h3>
+      <h3 className="text-xs text-ink-subtle uppercase mt-4 mb-1">Recipients</h3>
       <ul className="space-y-1.5 mb-3">
         {recipients.map((r) => (
           <RecipientRow
@@ -440,15 +446,15 @@ function TelegramSection({ accounts, workspaces }) {
           placeholder="name"
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+          className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
         />
         <input
           placeholder="telegram chat id"
           value={draft.chatId}
           onChange={(e) => setDraft({ ...draft, chatId: e.target.value })}
-          className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+          className="px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
         />
-        <button type="submit" className="px-3 py-1.5 rounded bg-emerald-700 text-sm">
+        <button type="submit" className="px-3 py-1.5 rounded bg-brand text-sm">
           Add recipient
         </button>
       </form>
@@ -460,11 +466,11 @@ function RecipientRow({ recipient, workspaces, accounts, onChanged }) {
   const [pick, setPick] = useState("workspace");
   const [targetId, setTargetId] = useState(workspaces[0]?.id ?? accounts[0]?.id ?? 0);
   return (
-    <li className="border border-zinc-800 rounded p-2.5 space-y-2">
+    <li className="border border-hairline rounded p-2.5 space-y-2">
       <div className="flex justify-between items-center">
         <span className="text-sm">
-          <span className="text-zinc-100">{recipient.name}</span>{" "}
-          <span className="text-zinc-500 text-xs">({recipient.chatId})</span>
+          <span className="text-ink">{recipient.name}</span>{" "}
+          <span className="text-ink-subtle text-xs">({recipient.chatId})</span>
         </span>
         <button
           type="button"
@@ -472,7 +478,7 @@ function RecipientRow({ recipient, workspaces, accounts, onChanged }) {
             await Telegram.DeleteRecipient(recipient.id);
             onChanged();
           }}
-          className="text-xs text-zinc-500 hover:text-rose-400"
+          className="text-xs text-ink-subtle hover:text-danger"
         >
           delete
         </button>
@@ -481,7 +487,7 @@ function RecipientRow({ recipient, workspaces, accounts, onChanged }) {
         <select
           value={pick}
           onChange={(e) => setPick(e.target.value)}
-          className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded"
+          className="px-2 py-1 bg-surface-2 border border-hairline-strong rounded"
         >
           <option value="workspace">workspace</option>
           <option value="account">account</option>
@@ -489,7 +495,7 @@ function RecipientRow({ recipient, workspaces, accounts, onChanged }) {
         <select
           value={targetId}
           onChange={(e) => setTargetId(Number(e.target.value))}
-          className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded"
+          className="px-2 py-1 bg-surface-2 border border-hairline-strong rounded"
         >
           {(pick === "workspace" ? workspaces : accounts).map((x) => (
             <option key={x.id} value={x.id}>
@@ -506,7 +512,7 @@ function RecipientRow({ recipient, workspaces, accounts, onChanged }) {
               await Telegram.AssignToAccount(targetId, recipient.id);
             }
           }}
-          className="px-2 py-1 rounded bg-emerald-800"
+          className="px-2 py-1 rounded bg-brand-hover"
         >
           Assign
         </button>
