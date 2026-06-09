@@ -4,6 +4,10 @@ SHELL := /bin/bash
 FRONTEND_DIR := frontend
 GO_FILES := $(shell find . -name '*.go' -not -path './frontend/*' -not -path './build/*' -not -path './bindings/*' 2>/dev/null)
 
+# Pulled from build/config.yml so the assets target writes the right name
+# without us having to hand-sync it across multiple files.
+APP_NAME := $(shell awk '/^[[:space:]]*productName:/ {gsub(/"/,"",$$2); print $$2; exit}' build/config.yml)
+
 .PHONY: help
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make \033[36m<target>\033[0m\n\nTargets:\n"} \
@@ -12,8 +16,28 @@ help: ## Show this help
 ## --- Dev ---
 
 .PHONY: dev
-dev: ## Run Wails v3 dev server (hot-reload)
+dev: doctor ## Run Wails v3 dev server (hot-reload)
 	wails3 dev -config ./build/config.yml
+
+.PHONY: doctor
+doctor: ## Sanity-check the build setup (catches stale plists, missing tools)
+	@if [ -z "$(APP_NAME)" ]; then \
+	  echo "ERROR: APP_NAME could not be read from build/config.yml"; exit 1; \
+	fi
+	@if grep -q '<string>\.</string>' build/darwin/Info.dev.plist 2>/dev/null \
+	    || grep -q '<string>My Product</string>' build/darwin/Info.dev.plist 2>/dev/null; then \
+	  echo "Stale build assets detected (placeholder app name in Info.dev.plist)."; \
+	  echo "Run: make assets"; exit 1; \
+	fi
+
+.PHONY: assets
+assets: ## Regenerate platform build assets (plists/manifests) from build/config.yml
+	@if [ -z "$(APP_NAME)" ]; then \
+	  echo "ERROR: APP_NAME could not be read from build/config.yml"; exit 1; \
+	fi
+	cd build && wails3 update build-assets \
+	  -name "$(APP_NAME)" -binaryname "$(APP_NAME)" \
+	  -config config.yml -dir .
 
 .PHONY: build
 build: ## Build the production app
