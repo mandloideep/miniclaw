@@ -16,6 +16,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/account"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
+	"github.com/mandloideep/miniclaw/internal/services/ollama"
 	"github.com/mandloideep/miniclaw/internal/services/workspace"
 )
 
@@ -52,6 +53,7 @@ func run() error {
 			application.NewService(keychain.New()),
 			application.NewService(workspace.New(pool)),
 			application.NewService(account.New(pool)),
+			application.NewService(ollama.New()),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
