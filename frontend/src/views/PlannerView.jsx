@@ -106,47 +106,60 @@ function CalendarPane({ workspace }) {
         {blocks.length === 0 && (
           <li className="text-[12px] text-ink-tertiary">No upcoming blocks.</li>
         )}
-        {blocks.map((b) => (
-          <li
-            key={b.id}
-            className="px-3 py-2.5 border border-hairline rounded-md bg-surface-1 flex items-start gap-3"
-          >
-            <div className="flex-1 min-w-0">
-              <div className="text-[13px] text-ink truncate">{b.title}</div>
-              <div className="text-[11px] text-ink-subtle">{formatRange(b.startAt, b.endAt)}</div>
-            </div>
-            <Badge variant="outline" className="text-[10px]">
-              {b.kind}
-            </Badge>
-            {b.googleEventId ? (
-              <Badge variant="muted" className="text-[10px]">
-                synced
+        {blocks.map((b) => {
+          const conflicts = findConflicts(b, blocks);
+          return (
+            <li
+              key={b.id}
+              className={`px-3 py-2.5 border rounded-md flex items-start gap-3 ${
+                conflicts.length ? "border-danger/40 bg-danger/5" : "border-hairline bg-surface-1"
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] text-ink truncate">{b.title}</div>
+                <div className="text-[11px] text-ink-subtle">{formatRange(b.startAt, b.endAt)}</div>
+                {conflicts.length > 0 && (
+                  <div
+                    className="text-[11px] text-danger mt-0.5"
+                    title={conflicts.map((c) => c.title).join(", ")}
+                  >
+                    Overlaps with {conflicts.map((c) => c.title || "(untitled)").join(", ")}
+                  </div>
+                )}
+              </div>
+              <Badge variant="outline" className="text-[10px]">
+                {b.kind}
               </Badge>
-            ) : (
+              {b.googleEventId ? (
+                <Badge variant="muted" className="text-[10px]">
+                  synced
+                </Badge>
+              ) : (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={async () => {
+                    await Calendar.Promote(b.id);
+                    refresh();
+                  }}
+                >
+                  Promote
+                </Button>
+              )}
               <Button
                 size="xs"
                 variant="ghost"
                 onClick={async () => {
-                  await Calendar.Promote(b.id);
+                  await Calendar.Delete(b.id);
                   refresh();
                 }}
+                className="text-ink-subtle hover:text-danger"
               >
-                Promote
+                <Trash2 className="w-3 h-3" />
               </Button>
-            )}
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={async () => {
-                await Calendar.Delete(b.id);
-                refresh();
-              }}
-              className="text-ink-subtle hover:text-danger"
-            >
-              <Trash2 className="w-3 h-3" />
-            </Button>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -497,6 +510,23 @@ function inlineMd(s) {
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+}
+
+// findConflicts returns the other blocks whose time ranges overlap with
+// the target's. Two blocks overlap when start < other.end && end > other.start.
+function findConflicts(target, all) {
+  const tStart = new Date(target.startAt).getTime();
+  const tEnd = new Date(target.endAt).getTime();
+  if (!Number.isFinite(tStart) || !Number.isFinite(tEnd) || tEnd <= tStart) {
+    return [];
+  }
+  return all.filter((b) => {
+    if (b.id === target.id) return false;
+    const s = new Date(b.startAt).getTime();
+    const e = new Date(b.endAt).getTime();
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return false;
+    return tStart < e && tEnd > s;
+  });
 }
 
 function formatRange(startISO, endISO) {
