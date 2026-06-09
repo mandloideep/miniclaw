@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"strings"
 	"time"
 
@@ -31,12 +32,20 @@ import (
 // internal/services/categories.Classify in main; nil-safe inside Sync.
 type Classifier func(fromAddress, listUnsubscribeHeader string) string
 
+// AttachmentStore is the optional sink for inline images and file
+// attachments extracted from multipart IMAP bodies. Implemented by
+// *attachments.Service. nil-safe inside the syncer for tests.
+type AttachmentStore interface {
+	Store(ctx context.Context, emailID int64, contentID, filename, mime string, isInline bool, data []byte) error
+}
+
 // IMAPSyncer ingests one account at a time.
 type IMAPSyncer struct {
-	q        *sqlcgen.Queries
-	accounts *account.Service
-	triage   *triage.Service
-	classify Classifier
+	q           *sqlcgen.Queries
+	accounts    *account.Service
+	triage      *triage.Service
+	classify    Classifier
+	attachments AttachmentStore
 	// dialTLS is overridable for tests.
 	dialTLS func(addr string, opts *imapclient.Options) (*imapclient.Client, error)
 }
@@ -52,6 +61,12 @@ func NewIMAPSyncer(pool *sql.DB, acc *account.Service, tri *triage.Service, clas
 		classify: classify,
 		dialTLS:  imapclient.DialTLS,
 	}
+}
+
+// AttachInlineStore wires an attachments sink in place. Mirrors the Gmail
+// syncer's method so main.go can register the same backing service.
+func (s *IMAPSyncer) AttachInlineStore(store AttachmentStore) {
+	s.attachments = store
 }
 
 // Sync runs one pass over account id's INBOX, upserting every message
@@ -183,9 +198,9 @@ func (s *IMAPSyncer) syncFolder(ctx context.Context, c *imapclient.Client, accou
 			return written, err
 		}
 		raw := msg.FindBodySection(bodySection)
-		plain, htmlBody, headers := parseMessage(raw)
+		parsed := parseMessage(raw)
 
-		hdrJSON, _ := json.Marshal(headers)
+		hdrJSON, _ := json.Marshal(parsed.headers)
 		from := firstAddress(msg.Envelope.From)
 		to := joinAddresses(msg.Envelope.To)
 		cc := joinAddresses(msg.Envelope.Cc)
@@ -211,18 +226,22 @@ func (s *IMAPSyncer) syncFolder(ctx context.Context, c *imapclient.Client, accou
 			CcAddresses: cc,
 			Subject:     msg.Envelope.Subject,
 			ReceivedAt:  msg.Envelope.Date.UTC().Format(time.RFC3339),
-			BodyPlain:   plain,
-			BodyHtml:    htmlBody,
+			BodyPlain:   parsed.plain,
+			BodyHtml:    parsed.htmlBody,
 			HeadersJson: string(hdrJSON),
+			InReplyTo:   parsed.inReplyTo,
+			EmailRefs:   parsed.references,
+			ThreadID:    DeriveThreadID(msg.Envelope.MessageID, parsed.inReplyTo, parsed.references),
 		})
 		if err != nil {
 			return written, fmt.Errorf("upsert message %s: %w", msg.Envelope.MessageID, err)
 		}
 		if s.classify != nil {
-			if cat := s.classify(from.address, headers["List-Unsubscribe"]); cat != "" {
+			if cat := s.classify(from.address, parsed.headers["List-Unsubscribe"]); cat != "" {
 				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{Category: cat, ID: id})
 			}
 		}
+		s.persistAttachments(ctx, id, parsed.attachments)
 		written++
 	}
 	return written, nil
@@ -332,8 +351,8 @@ func (s *IMAPSyncer) backfillFolder(ctx context.Context, c *imapclient.Client, a
 			return written, err
 		}
 		raw := msg.FindBodySection(bodySection)
-		plain, htmlBody, headers := parseMessage(raw)
-		hdrJSON, _ := json.Marshal(headers)
+		parsed := parseMessage(raw)
+		hdrJSON, _ := json.Marshal(parsed.headers)
 		from := firstAddress(msg.Envelope.From)
 		to := joinAddresses(msg.Envelope.To)
 		cc := joinAddresses(msg.Envelope.Cc)
@@ -348,18 +367,22 @@ func (s *IMAPSyncer) backfillFolder(ctx context.Context, c *imapclient.Client, a
 			CcAddresses: cc,
 			Subject:     msg.Envelope.Subject,
 			ReceivedAt:  msg.Envelope.Date.UTC().Format(time.RFC3339),
-			BodyPlain:   plain,
-			BodyHtml:    htmlBody,
+			BodyPlain:   parsed.plain,
+			BodyHtml:    parsed.htmlBody,
 			HeadersJson: string(hdrJSON),
+			InReplyTo:   parsed.inReplyTo,
+			EmailRefs:   parsed.references,
+			ThreadID:    DeriveThreadID(msg.Envelope.MessageID, parsed.inReplyTo, parsed.references),
 		})
 		if err != nil {
 			return written, fmt.Errorf("upsert message %s: %w", msg.Envelope.MessageID, err)
 		}
 		if s.classify != nil {
-			if cat := s.classify(from.address, headers["List-Unsubscribe"]); cat != "" {
+			if cat := s.classify(from.address, parsed.headers["List-Unsubscribe"]); cat != "" {
 				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{Category: cat, ID: id})
 			}
 		}
+		s.persistAttachments(ctx, id, parsed.attachments)
 		written++
 	}
 	return written, nil
@@ -396,25 +419,52 @@ func joinAddresses(in []imap.Address) string {
 	return strings.Join(parts, ", ")
 }
 
+// parsedMessage is what parseMessage returns once the raw RFC822 bytes
+// have been walked. attachments holds every inline image (Content-ID set)
+// plus every non-inline part that has a filename — the same shape the
+// Gmail syncer produces, so the persist path is symmetrical.
+type parsedMessage struct {
+	plain       string
+	htmlBody    string
+	headers     map[string]string
+	inReplyTo   string
+	references  string
+	attachments []parsedAttachment
+}
+
+// parsedAttachment is one inline image or file part ready to persist.
+type parsedAttachment struct {
+	contentID string
+	filename  string
+	mime      string
+	inline    bool
+	data      []byte
+}
+
 // parseMessage walks the raw RFC822 bytes and pulls out text/plain, text/html
-// (best-effort), and a flattened header map.
-func parseMessage(raw []byte) (plain, htmlBody string, headers map[string]string) {
-	headers = map[string]string{}
+// (best-effort), threading headers, and every attachment-shaped part.
+func parseMessage(raw []byte) parsedMessage {
+	out := parsedMessage{headers: map[string]string{}}
 	if len(raw) == 0 {
-		return
+		return out
 	}
 	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
 	if err != nil {
 		// Fall back: dump everything as plain text. Better some content
 		// than none when a server hands us something quirky.
-		plain = string(raw)
-		return
+		out.plain = string(raw)
+		return out
 	}
-	for _, key := range []string{"From", "To", "Cc", "Subject", "Date", "Message-ID", "List-Unsubscribe"} {
+	for _, key := range []string{
+		"From", "To", "Cc", "Subject", "Date",
+		"Message-ID", "In-Reply-To", "References", "List-Unsubscribe",
+	} {
 		if v := mr.Header.Get(key); v != "" {
-			headers[key] = v
+			out.headers[key] = v
 		}
 	}
+	out.inReplyTo = strings.TrimSpace(mr.Header.Get("In-Reply-To"))
+	out.references = strings.TrimSpace(mr.Header.Get("References"))
 	for {
 		p, perr := mr.NextPart()
 		if errors.Is(perr, io.EOF) {
@@ -424,25 +474,81 @@ func parseMessage(raw []byte) (plain, htmlBody string, headers map[string]string
 			break
 		}
 		body, _ := io.ReadAll(p.Body)
-		if h, ok := p.Header.(*mail.InlineHeader); ok {
-			ct, _, _ := h.ContentType()
-			switch ct {
-			case "text/plain":
-				if plain == "" {
-					plain = string(body)
-				}
-			case "text/html":
-				if htmlBody == "" {
-					htmlBody = string(body)
-				}
+		switch h := p.Header.(type) {
+		case *mail.InlineHeader:
+			ct, ctParams, _ := h.ContentType()
+			cid := strings.Trim(strings.TrimSpace(h.Get("Content-ID")), "<>")
+			if ct == "text/plain" && cid == "" && out.plain == "" {
+				out.plain = string(body)
+				continue
 			}
+			if ct == "text/html" && cid == "" && out.htmlBody == "" {
+				out.htmlBody = string(body)
+				continue
+			}
+			// Inline images and non-text inline parts surface as attachments
+			// so the reader can splice them via cid:.
+			if cid != "" || (ct != "text/plain" && ct != "text/html") {
+				name := ctParams["name"]
+				out.attachments = append(out.attachments, parsedAttachment{
+					contentID: cid,
+					filename:  decodeFilename(name),
+					mime:      ct,
+					inline:    cid != "",
+					data:      append([]byte(nil), body...),
+				})
+			}
+		case *mail.AttachmentHeader:
+			ct, ctParams, _ := h.ContentType()
+			fn, _ := h.Filename()
+			if fn == "" {
+				fn = decodeFilename(ctParams["name"])
+			}
+			cid := strings.Trim(strings.TrimSpace(h.Get("Content-ID")), "<>")
+			out.attachments = append(out.attachments, parsedAttachment{
+				contentID: cid,
+				filename:  fn,
+				mime:      ct,
+				inline:    cid != "",
+				data:      append([]byte(nil), body...),
+			})
 		}
 	}
-	if plain == "" && htmlBody != "" {
+	if out.plain == "" && out.htmlBody != "" {
 		// Strip a poor-man's plaintext from HTML if no text/plain part exists.
-		plain = stripHTML(htmlBody)
+		out.plain = stripHTML(out.htmlBody)
 	}
-	return
+	return out
+}
+
+// decodeFilename unwraps RFC 2047 encoded-word filenames where present.
+// Non-encoded values pass through untouched.
+func decodeFilename(name string) string {
+	if name == "" {
+		return ""
+	}
+	dec := mime.WordDecoder{}
+	if v, err := dec.DecodeHeader(name); err == nil {
+		return v
+	}
+	return name
+}
+
+// persistAttachments stores every attachment for the upserted email.
+// nil-safe when no attachments sink is wired in (e.g. unit tests).
+func (s *IMAPSyncer) persistAttachments(ctx context.Context, emailID int64, parts []parsedAttachment) {
+	if s.attachments == nil || len(parts) == 0 {
+		return
+	}
+	for _, a := range parts {
+		if ctx.Err() != nil {
+			return
+		}
+		if len(a.data) == 0 {
+			continue
+		}
+		_ = s.attachments.Store(ctx, emailID, a.contentID, a.filename, a.mime, a.inline, a.data)
+	}
 }
 
 // stripHTML is a deliberately dumb tag remover used only as a last-resort

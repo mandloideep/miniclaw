@@ -22,11 +22,27 @@ type AttachmentStore interface {
 	Store(ctx context.Context, emailID int64, contentID, filename, mime string, isInline bool, data []byte) error
 }
 
+// Triage is the optional block-rule interface used by ingest to drop
+// senders the user has marked as blocked. Mirrors the IMAP syncer's
+// triage hook so both paths apply the same filter rules.
+type Triage interface {
+	MatchesBlock(ctx context.Context, accountID int64, fromAddress string) (bool, error)
+	RegisterSender(ctx context.Context, accountID int64, address string) error
+}
+
+// threadDeriver computes a stable thread anchor from RFC822 headers.
+// Wired to email.DeriveThreadID at runtime via AttachThreadDeriver to
+// avoid an import cycle between gmailoauth and email (email already
+// imports nothing from us today; keep it that way).
+type threadDeriver func(messageID, inReplyTo, references string) string
+
 // Syncer ingests one Gmail-OAuth account at a time using the REST API.
 type Syncer struct {
-	q           *sqlcgen.Queries
-	accounts    *account.Service
-	attachments AttachmentStore
+	q            *sqlcgen.Queries
+	accounts     *account.Service
+	attachments  AttachmentStore
+	triage       Triage
+	deriveThread threadDeriver
 }
 
 // NewSyncer wires the syncer to the shared pool and account service.
@@ -42,12 +58,27 @@ func (s *Syncer) AttachInlineStore(store AttachmentStore) {
 	s.attachments = store
 }
 
+// AttachTriage wires a triage service in place so blocked senders are
+// dropped before upsert and first-seen senders register in the screener.
+func (s *Syncer) AttachTriage(t Triage) {
+	s.triage = t
+}
+
+// AttachThreadDeriver wires a thread-id derivation function so the
+// Gmail syncer produces the same anchor the IMAP syncer does. Empty
+// derivation just stores the message-id; explicit so tests can
+// inject a deterministic fake.
+func (s *Syncer) AttachThreadDeriver(fn func(messageID, inReplyTo, references string) string) {
+	s.deriveThread = fn
+}
+
 // Sync pulls messages from the user's INBOX newer than the account's
 // last_synced_at (or fetch_since if that's later). Returns count written.
 //
-// Uses /gmail/v1/users/me/messages with a Gmail search query, then
-// /gmail/v1/users/me/messages/{id}?format=full for each. Dedupe is on
-// (account_id, message_id) via the schema's UNIQUE constraint.
+// On accounts that already have a gmail_history_id watermark, we use
+// users.history.list for cheap incremental sync; otherwise the first
+// pass falls back to messages.list with a date-bounded query. Dedupe is
+// on (account_id, message_id) via the schema's UNIQUE constraint.
 func (s *Syncer) Sync(ctx context.Context, accountID int64) (int, error) {
 	acc, err := s.accounts.Get(ctx, accountID)
 	if err != nil {
@@ -62,19 +93,67 @@ func (s *Syncer) Sync(ctx context.Context, accountID int64) (int, error) {
 	}
 	client := oauth2HTTPClient(ctx, src)
 
-	q := gmailWatermarkQuery(acc.FetchSince, acc.LastSyncedAt)
-	ids, err := listMessageIDs(ctx, client, q)
-	if err != nil {
-		return 0, err
+	historyID, _ := s.q.GetGmailHistoryID(ctx, accountID)
+	var (
+		ids        []string
+		nextCursor string
+	)
+	if historyID != "" {
+		ids, nextCursor, err = listHistoryMessageIDs(ctx, client, historyID)
+		if err != nil {
+			// history cursors expire after ~7 days. Fall back to the
+			// date-bounded query and re-seed the cursor at end-of-pass.
+			ids = nil
+			nextCursor = ""
+		}
 	}
+	if len(ids) == 0 && nextCursor == "" {
+		q := gmailWatermarkQuery(acc.FetchSince, acc.LastSyncedAt)
+		ids, err = listMessageIDs(ctx, client, q)
+		if err != nil {
+			return 0, err
+		}
+	}
+	written := s.ingestMessages(ctx, client, accountID, ids)
+	// Always re-seed the history cursor after a pass: either the one
+	// users.history.list handed back, or the freshest profile head if
+	// we fell back to the date query.
+	if nextCursor == "" {
+		nextCursor, _ = fetchProfileHistoryID(ctx, client)
+	}
+	if nextCursor != "" {
+		_ = s.q.UpdateGmailHistoryID(ctx, sqlcgen.UpdateGmailHistoryIDParams{
+			GmailHistoryID: nextCursor, ID: accountID,
+		})
+	}
+	if err := s.accounts.MarkSynced(ctx, accountID); err != nil {
+		return written, err
+	}
+	return written, nil
+}
+
+// ingestMessages fetches each id, applies block rules, and upserts.
+// Returns the count of new/updated rows. Shared by Sync and BackfillBefore.
+func (s *Syncer) ingestMessages(ctx context.Context, client *http.Client, accountID int64, ids []string) int {
 	written := 0
 	for _, id := range ids {
 		if cerr := ctx.Err(); cerr != nil {
-			return written, cerr
+			return written
 		}
 		msg, ferr := fetchMessage(ctx, client, id)
 		if ferr != nil {
 			continue
+		}
+		if s.triage != nil {
+			blocked, blockErr := s.triage.MatchesBlock(ctx, accountID, msg.FromAddress)
+			if blockErr == nil && blocked {
+				continue
+			}
+			_ = s.triage.RegisterSender(ctx, accountID, msg.FromAddress)
+		}
+		threadID := msg.MessageID
+		if s.deriveThread != nil {
+			threadID = s.deriveThread(msg.MessageID, msg.InReplyTo, msg.References)
 		}
 		id2, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
 			AccountID:   accountID,
@@ -90,21 +169,40 @@ func (s *Syncer) Sync(ctx context.Context, accountID int64) (int, error) {
 			BodyPlain:   msg.BodyPlain,
 			BodyHtml:    msg.BodyHTML,
 			HeadersJson: msg.HeadersJSON,
+			InReplyTo:   msg.InReplyTo,
+			EmailRefs:   msg.References,
+			ThreadID:    threadID,
 		})
-		if err == nil {
-			if msg.Category != "" {
-				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{
-					Category: msg.Category, ID: id2,
-				})
-			}
-			s.persistAttachments(ctx, client, msg.GmailID, id2, msg.Attachments)
-			written++
+		if err != nil {
+			continue
 		}
+		if msg.Category != "" {
+			_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{
+				Category: msg.Category, ID: id2,
+			})
+		}
+		s.persistLabels(ctx, id2, msg.Labels)
+		s.persistAttachments(ctx, client, msg.GmailID, id2, msg.Attachments)
+		written++
 	}
-	if err := s.accounts.MarkSynced(ctx, accountID); err != nil {
-		return written, err
+	return written
+}
+
+// persistLabels rewrites the label set for an email — full replacement
+// is fine because Gmail returns the entire labelIds list on each fetch.
+func (s *Syncer) persistLabels(ctx context.Context, emailID int64, labels []string) {
+	if ctx.Err() != nil {
+		return
 	}
-	return written, nil
+	_ = s.q.ClearEmailLabels(ctx, emailID)
+	for _, label := range labels {
+		if label == "" {
+			continue
+		}
+		_ = s.q.AddEmailLabel(ctx, sqlcgen.AddEmailLabelParams{
+			EmailID: emailID, Label: label,
+		})
+	}
 }
 
 // gmailWatermarkQuery builds a Gmail search query that bounds the result
@@ -217,41 +315,7 @@ func (s *Syncer) BackfillBefore(ctx context.Context, accountID int64, before str
 	if len(ids) > maxMessages {
 		ids = ids[:maxMessages]
 	}
-	written := 0
-	for _, id := range ids {
-		if cerr := ctx.Err(); cerr != nil {
-			return written, cerr
-		}
-		msg, ferr := fetchMessage(ctx, client, id)
-		if ferr != nil {
-			continue
-		}
-		id2, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
-			AccountID:   accountID,
-			MessageID:   msg.MessageID,
-			Folder:      "INBOX",
-			Uid:         sql.NullInt64{},
-			FromAddress: msg.FromAddress,
-			FromName:    msg.FromName,
-			ToAddresses: msg.To,
-			CcAddresses: msg.Cc,
-			Subject:     msg.Subject,
-			ReceivedAt:  msg.ReceivedAt,
-			BodyPlain:   msg.BodyPlain,
-			BodyHtml:    msg.BodyHTML,
-			HeadersJson: msg.HeadersJSON,
-		})
-		if err == nil {
-			if msg.Category != "" {
-				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{
-					Category: msg.Category, ID: id2,
-				})
-			}
-			s.persistAttachments(ctx, client, msg.GmailID, id2, msg.Attachments)
-			written++
-		}
-	}
-	return written, nil
+	return s.ingestMessages(ctx, client, accountID, ids), nil
 }
 
 // persistAttachments stores each inline/file attachment for the given
@@ -311,7 +375,10 @@ type gmailMessage struct {
 	BodyPlain   string
 	BodyHTML    string
 	HeadersJSON string
-	Category    string // mapped from Gmail labelIds; empty if not categorisable
+	InReplyTo   string
+	References  string
+	Category    string   // mapped from Gmail labelIds; empty if not categorisable
+	Labels      []string // raw labelIds; persisted to email_labels
 	Attachments []gmailAttachment
 }
 
@@ -356,7 +423,10 @@ func fetchMessage(ctx context.Context, client *http.Client, id string) (gmailMes
 		ReceivedAt:  internalDateToRFC3339(body.InternalDate),
 		BodyPlain:   walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/plain"),
 		BodyHTML:    walkParts(body.Payload.Parts, body.Payload.MimeType, body.Payload.Body.Data, "text/html"),
+		InReplyTo:   strings.TrimSpace(hdrs["In-Reply-To"]),
+		References:  strings.TrimSpace(hdrs["References"]),
 		Category:    categoryFromLabels(body.LabelIds),
+		Labels:      body.LabelIds,
 		Attachments: collectAttachments(body.Payload.Parts),
 	}
 	if out.MessageID == "" {

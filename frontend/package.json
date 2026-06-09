@@ -13,6 +13,7 @@
     "check": "biome check --write ."
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.2",
     "@wailsio/runtime": "latest",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

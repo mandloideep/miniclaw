@@ -19,7 +19,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          folder_allowlist, created_at, updated_at
+          folder_allowlist, created_at, updated_at, gmail_history_id
 `
 
 type CreateIMAPAccountParams struct {
@@ -69,6 +69,7 @@ func (q *Queries) CreateIMAPAccount(ctx context.Context, arg CreateIMAPAccountPa
 		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GmailHistoryID,
 	)
 	return i, err
 }
@@ -81,7 +82,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          folder_allowlist, created_at, updated_at
+          folder_allowlist, created_at, updated_at, gmail_history_id
 `
 
 type CreateMSOAuthAccountParams struct {
@@ -123,6 +124,7 @@ func (q *Queries) CreateMSOAuthAccount(ctx context.Context, arg CreateMSOAuthAcc
 		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GmailHistoryID,
 	)
 	return i, err
 }
@@ -135,7 +137,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          folder_allowlist, created_at, updated_at
+          folder_allowlist, created_at, updated_at, gmail_history_id
 `
 
 type CreateOAuthAccountParams struct {
@@ -177,6 +179,7 @@ func (q *Queries) CreateOAuthAccount(ctx context.Context, arg CreateOAuthAccount
 		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GmailHistoryID,
 	)
 	return i, err
 }
@@ -194,7 +197,7 @@ const getAccount = `-- name: GetAccount :one
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       folder_allowlist, created_at, updated_at
+       folder_allowlist, created_at, updated_at, gmail_history_id
 FROM accounts
 WHERE id = ?
 `
@@ -220,15 +223,27 @@ func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
 		&i.FolderAllowlist,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GmailHistoryID,
 	)
 	return i, err
+}
+
+const getGmailHistoryID = `-- name: GetGmailHistoryID :one
+SELECT gmail_history_id FROM accounts WHERE id = ?
+`
+
+func (q *Queries) GetGmailHistoryID(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRowContext(ctx, getGmailHistoryID, id)
+	var gmail_history_id string
+	err := row.Scan(&gmail_history_id)
+	return gmail_history_id, err
 }
 
 const listAccounts = `-- name: ListAccounts :many
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       folder_allowlist, created_at, updated_at
+       folder_allowlist, created_at, updated_at, gmail_history_id
 FROM accounts
 ORDER BY workspace_id, id
 `
@@ -260,6 +275,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.FolderAllowlist,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GmailHistoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -278,7 +294,7 @@ const listAccountsByWorkspace = `-- name: ListAccountsByWorkspace :many
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       folder_allowlist, created_at, updated_at
+       folder_allowlist, created_at, updated_at, gmail_history_id
 FROM accounts
 WHERE workspace_id = ?
 ORDER BY id
@@ -311,6 +327,7 @@ func (q *Queries) ListAccountsByWorkspace(ctx context.Context, workspaceID int64
 			&i.FolderAllowlist,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GmailHistoryID,
 		); err != nil {
 			return nil, err
 		}
@@ -395,5 +412,19 @@ type UpdateFolderAllowlistParams struct {
 
 func (q *Queries) UpdateFolderAllowlist(ctx context.Context, arg UpdateFolderAllowlistParams) error {
 	_, err := q.db.ExecContext(ctx, updateFolderAllowlist, arg.FolderAllowlist, arg.ID)
+	return err
+}
+
+const updateGmailHistoryID = `-- name: UpdateGmailHistoryID :exec
+UPDATE accounts SET gmail_history_id = ?, updated_at = datetime('now') WHERE id = ?
+`
+
+type UpdateGmailHistoryIDParams struct {
+	GmailHistoryID string
+	ID             int64
+}
+
+func (q *Queries) UpdateGmailHistoryID(ctx context.Context, arg UpdateGmailHistoryIDParams) error {
+	_, err := q.db.ExecContext(ctx, updateGmailHistoryID, arg.GmailHistoryID, arg.ID)
 	return err
 }

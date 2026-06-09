@@ -43,15 +43,43 @@ func TestParseMessage_PlainAndHTML(t *testing.T) {
 		"<p>html body</p>\r\n" +
 		"--BOUNDARY--\r\n")
 
-	plain, htmlBody, headers := parseMessage(raw)
-	if plain == "" {
+	parsed := parseMessage(raw)
+	if parsed.plain == "" {
 		t.Fatal("plain body missing")
 	}
-	if htmlBody == "" {
+	if parsed.htmlBody == "" {
 		t.Fatal("html body missing")
 	}
-	if headers["Subject"] != "hi" {
-		t.Fatalf("subject header: %q", headers["Subject"])
+	if parsed.headers["Subject"] != "hi" {
+		t.Fatalf("subject header: %q", parsed.headers["Subject"])
+	}
+}
+
+func TestDeriveThreadID(t *testing.T) {
+	if got := DeriveThreadID("<a>", "", ""); got != "<a>" {
+		t.Fatalf("self fallback: %q", got)
+	}
+	if got := DeriveThreadID("<c>", "<b>", "<a> <b>"); got != "<a>" {
+		t.Fatalf("first ref wins: %q", got)
+	}
+	if got := DeriveThreadID("<c>", "<b>", ""); got != "<b>" {
+		t.Fatalf("in-reply-to fallback: %q", got)
+	}
+}
+
+func TestParseMessage_ThreadingHeaders(t *testing.T) {
+	raw := []byte("From: a@b.test\r\n" +
+		"Subject: re\r\n" +
+		"Message-ID: <m@2>\r\n" +
+		"In-Reply-To: <m@1>\r\n" +
+		"References: <root@x> <m@1>\r\n" +
+		"Content-Type: text/plain\r\n\r\nbody\r\n")
+	p := parseMessage(raw)
+	if p.inReplyTo != "<m@1>" {
+		t.Fatalf("in-reply-to: %q", p.inReplyTo)
+	}
+	if p.references != "<root@x> <m@1>" {
+		t.Fatalf("references: %q", p.references)
 	}
 }
 

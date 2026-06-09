@@ -25,6 +25,8 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/keychain"
 	"github.com/mandloideep/miniclaw/internal/services/msoauth"
 	"github.com/mandloideep/miniclaw/internal/services/ollama"
+	"github.com/mandloideep/miniclaw/internal/services/planner"
+	"github.com/mandloideep/miniclaw/internal/services/snooze"
 	"github.com/mandloideep/miniclaw/internal/services/summary"
 	"github.com/mandloideep/miniclaw/internal/services/telegram"
 	"github.com/mandloideep/miniclaw/internal/services/triage"
@@ -75,8 +77,11 @@ func run() error {
 	imapSyncer := email.NewIMAPSyncer(pool, accountSvc, triageSvc, func(from, unsub string) string {
 		return string(categories.Classify(from, unsub))
 	})
+	imapSyncer.AttachInlineStore(attachSvc)
 	gmailSync := gmailoauth.NewSyncer(pool, accountSvc)
 	gmailSync.AttachInlineStore(attachSvc)
+	gmailSync.AttachTriage(triageSvc)
+	gmailSync.AttachThreadDeriver(email.DeriveThreadID)
 	gmailAuth := gmailoauth.New()
 	msSync := msoauth.NewSyncer(pool, accountSvc)
 	msAuth := msoauth.New()
@@ -86,6 +91,8 @@ func run() error {
 	tg := telegram.New(pool)
 	wsSvc := workspace.New(pool)
 	digestSvc := digest.New(pool, accountSvc, wsSvc, tg)
+	snoozeSvc := snooze.New(pool)
+	snoozeSvc.AttachNotifier(tg)
 	app := application.New(application.Options{
 		Name:        "miniclaw",
 		Description: "Local-AI email triage with Telegram digests",
@@ -108,6 +115,10 @@ func run() error {
 			application.NewService(msSync),
 			application.NewService(inbox.New(pool)),
 			application.NewService(attachSvc),
+			application.NewService(snoozeSvc),
+			application.NewService(planner.NewCalendar(pool)),
+			application.NewService(planner.NewTodos(pool)),
+			application.NewService(planner.NewNotes(pool)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -169,6 +180,8 @@ func run() error {
 	})
 	go sched.Start(schedCtx)
 	go digestSvc.Start(schedCtx)
+	go snoozeSvc.Start(schedCtx)
+	go warmOllamaModels(schedCtx, accountSvc, llm)
 
 	// Real-time IMAP push: keeps one IDLE connection per IMAP account so new
 	// mail is noticed within hundreds of ms instead of waiting for the next
@@ -194,5 +207,38 @@ func emitClockTick(app *application.App) {
 	for {
 		app.Event.Emit("time", time.Now().Format(time.RFC1123))
 		time.Sleep(time.Second)
+	}
+}
+
+// warmOllamaModels asks Ollama to load each configured model into memory
+// shortly after boot, so the first summarisation pass doesn't trip the
+// generate timeout while the model cold-starts. Best-effort: if Ollama
+// is down or the model isn't pulled yet, the failure just logs and
+// SetLastError flips so the UI banner surfaces it.
+func warmOllamaModels(ctx context.Context, accountSvc *account.Service, llm *ollama.Service) {
+	// Small delay so the UI is up before we hit Ollama — keeps the first
+	// frame snappy even when warm-up blocks for a while.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * time.Second):
+	}
+	accounts, err := accountSvc.List(ctx)
+	if err != nil {
+		log.Printf("warm: list accounts: %v", err)
+		return
+	}
+	seen := map[string]bool{}
+	for _, a := range accounts {
+		m := a.OllamaModel
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		if err := llm.Warm(ctx, m); err != nil {
+			log.Printf("warm %s: %v", m, err)
+			continue
+		}
+		log.Printf("warm %s: ready", m)
 	}
 }

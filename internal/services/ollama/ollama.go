@@ -34,24 +34,40 @@ type Model struct {
 }
 
 // Status is the frontend-facing snapshot of Ollama's reachability.
+//
+// LoadedModels lists models currently held in memory (via /api/ps). The
+// summariser warms the configured model proactively, but the UI uses
+// this to tell the user "summaries will be slow until X loads" rather
+// than silently surfacing a timeout error after a few minutes.
 type Status struct {
-	Running   bool   `json:"running"`
-	Version   string `json:"version,omitempty"`
-	Error     string `json:"error,omitempty"`
-	LastError string `json:"lastError,omitempty"` // most recent generate failure, if any
+	Running      bool     `json:"running"`
+	Version      string   `json:"version,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	LastError    string   `json:"lastError,omitempty"` // most recent generate failure, if any
+	LoadedModels []string `json:"loadedModels,omitempty"`
 }
 
 // Service is the Wails-registered Ollama client.
+//
+// Two HTTP clients live here on purpose:
+//
+//   - short  — 15s, for /api/version / /api/tags / /api/ps. Anything
+//     longer than that is a hung Ollama process, not a slow response.
+//   - long   — 8min, for /api/generate. Cold-loading a 7B+ model on a
+//     fresh process routinely takes 30-120s before the first token; the
+//     old 60s ceiling was the root cause of the "context deadline
+//     exceeded" wave the user hit on the first sync after launch.
 type Service struct {
 	baseURL string
-	client  *http.Client
+	short   *http.Client
+	long    *http.Client
 
 	errMu   sync.RWMutex
 	lastErr string
 }
 
-// New returns a Service pointed at DefaultBaseURL with a 60s default timeout
-// suitable for non-streaming generates against small local models.
+// New returns a Service pointed at DefaultBaseURL with sensible default
+// timeouts for both fast metadata calls and slow generate calls.
 func New() *Service {
 	return NewWithURL(DefaultBaseURL)
 }
@@ -60,14 +76,16 @@ func New() *Service {
 func NewWithURL(baseURL string) *Service {
 	return &Service{
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		short:   &http.Client{Timeout: 15 * time.Second},
+		long:    &http.Client{Timeout: 8 * time.Minute},
 	}
 }
 
-// Status hits /api/version. Returns Running=false (with Error populated) if
-// the server is down — non-fatal, the frontend uses it for the status banner.
+// Status hits /api/version + /api/ps. Returns Running=false (with Error
+// populated) if the server is down — non-fatal, the frontend uses it for
+// the status banner.
 func (s *Service) Status(ctx context.Context) Status {
-	resp, err := s.do(ctx, http.MethodGet, "/api/version", nil)
+	resp, err := s.do(ctx, s.short, http.MethodGet, "/api/version", nil)
 	if err != nil {
 		return Status{Running: false, Error: err.Error()}
 	}
@@ -79,12 +97,42 @@ func (s *Service) Status(ctx context.Context) Status {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return Status{Running: false, Error: fmt.Sprintf("decode version: %v", err)}
 	}
-	return Status{Running: true, Version: body.Version, LastError: s.LastError()}
+	return Status{
+		Running:      true,
+		Version:      body.Version,
+		LastError:    s.LastError(),
+		LoadedModels: s.loadedModels(ctx),
+	}
+}
+
+// loadedModels hits /api/ps. Best-effort; returns nil on any error so a
+// missing endpoint (older Ollama builds) doesn't break the status pill.
+func (s *Service) loadedModels(ctx context.Context) []string {
+	resp, err := s.do(ctx, s.short, http.MethodGet, "/api/ps", nil)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(body.Models))
+	for _, m := range body.Models {
+		if m.Name != "" {
+			out = append(out, m.Name)
+		}
+	}
+	return out
 }
 
 // ListModels returns installed models (`ollama list` equivalent).
 func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
-	resp, err := s.do(ctx, http.MethodGet, "/api/tags", nil)
+	resp, err := s.do(ctx, s.short, http.MethodGet, "/api/tags", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +200,7 @@ func (s *Service) Generate(ctx context.Context, req GenerateRequest) (string, er
 	if err != nil {
 		return "", fmt.Errorf("marshal generate: %w", err)
 	}
-	resp, err := s.do(ctx, http.MethodPost, "/api/generate", bytes.NewReader(body))
+	resp, err := s.do(ctx, s.long, http.MethodPost, "/api/generate", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -204,7 +252,7 @@ func (s *Service) SetLastError(msg string) {
 	s.lastErr = msg
 }
 
-func (s *Service) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+func (s *Service) do(ctx context.Context, client *http.Client, method, path string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -212,7 +260,7 @@ func (s *Service) do(ctx context.Context, method, path string, body io.Reader) (
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ollama %s %s: %w", method, path, err)
 	}
@@ -222,4 +270,32 @@ func (s *Service) do(ctx context.Context, method, path string, body io.Reader) (
 		return nil, fmt.Errorf("ollama %s %s: %s: %s", method, path, resp.Status, string(msg))
 	}
 	return resp, nil
+}
+
+// Warm asks Ollama to load the given model into memory without producing
+// any output (prompt=" "). Frontend onboarding can call it after picking
+// a model so the very first user-driven Generate is warm. Best-effort:
+// returns nil on success, the wrapped Generate error otherwise.
+func (s *Service) Warm(ctx context.Context, model string) error {
+	if model == "" {
+		return errors.New("ollama: model is required")
+	}
+	// Use a fresh-bodied request so the empty-response branch in Generate
+	// doesn't fire — we genuinely don't care about the reply, only that
+	// the model loaded.
+	payload, _ := json.Marshal(map[string]any{
+		"model":      model,
+		"prompt":     " ",
+		"stream":     false,
+		"keep_alive": "30m",
+	})
+	resp, err := s.do(ctx, s.long, http.MethodPost, "/api/generate", bytes.NewReader(payload))
+	if err != nil {
+		s.SetLastError(fmt.Sprintf("warm %s: %v", model, err))
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	s.SetLastError("")
+	return nil
 }

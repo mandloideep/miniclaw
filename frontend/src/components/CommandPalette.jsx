@@ -16,11 +16,26 @@ import { Dialog, DialogContent } from "./ui/dialog";
 
 const ACTION_DEFS = [
   { id: "nav:inbox", label: "Go to Inbox", icon: Inbox, hint: "Inbox" },
-  { id: "nav:put-aside", label: "Go to Put aside", icon: PauseCircle, hint: "Triage" },
+  {
+    id: "nav:put-aside",
+    label: "Go to Put aside",
+    icon: PauseCircle,
+    hint: "Triage",
+  },
   { id: "nav:screener", label: "Go to Screener", icon: Users, hint: "Triage" },
   { id: "nav:filters", label: "Go to Filters", icon: Filter, hint: "Triage" },
-  { id: "nav:categories", label: "Go to Categories", icon: Tag, hint: "Triage" },
-  { id: "sync", label: "Sync now (all accounts)", icon: RefreshCw, hint: "Action" },
+  {
+    id: "nav:categories",
+    label: "Go to Categories",
+    icon: Tag,
+    hint: "Triage",
+  },
+  {
+    id: "sync",
+    label: "Sync now (all accounts)",
+    icon: RefreshCw,
+    hint: "Action",
+  },
   { id: "settings", label: "Open Settings", icon: Cog, hint: "Action" },
 ];
 

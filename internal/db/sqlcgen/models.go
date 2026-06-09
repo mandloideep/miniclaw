@@ -26,6 +26,7 @@ type Account struct {
 	FolderAllowlist string
 	CreatedAt       string
 	UpdatedAt       string
+	GmailHistoryID  string
 }
 
 type AccountRecipient struct {
@@ -39,25 +40,59 @@ type AppSetting struct {
 	DefaultModel string
 }
 
+type CalendarBlock struct {
+	ID            int64
+	WorkspaceID   int64
+	Title         string
+	Notes         string
+	StartAt       string
+	EndAt         string
+	Kind          string
+	GoogleEventID string
+	CreatedAt     string
+	UpdatedAt     string
+}
+
 type Email struct {
-	ID          int64
-	AccountID   int64
-	MessageID   string
-	Folder      string
-	Uid         sql.NullInt64
-	FromAddress string
-	FromName    string
-	ToAddresses string
-	CcAddresses string
-	Subject     string
-	ReceivedAt  string
-	BodyPlain   string
-	BodyHtml    string
-	HeadersJson string
-	IsRead      int64
-	IsPutAside  int64
-	Category    string
-	CreatedAt   string
+	ID           int64
+	AccountID    int64
+	MessageID    string
+	Folder       string
+	Uid          sql.NullInt64
+	FromAddress  string
+	FromName     string
+	ToAddresses  string
+	CcAddresses  string
+	Subject      string
+	ReceivedAt   string
+	BodyPlain    string
+	BodyHtml     string
+	HeadersJson  string
+	IsRead       int64
+	IsPutAside   int64
+	Category     string
+	CreatedAt    string
+	InReplyTo    string
+	EmailRefs    string
+	ThreadID     string
+	SnoozedUntil sql.NullString
+}
+
+type EmailAttachment struct {
+	ID        int64
+	EmailID   int64
+	ContentID string
+	Filename  string
+	MimeType  string
+	SizeBytes int64
+	Data      []byte
+	IsInline  int64
+	CreatedAt string
+}
+
+type EmailLabel struct {
+	EmailID int64
+	Label   string
 }
 
 type EmailsFt struct {
@@ -72,6 +107,15 @@ type FilterRule struct {
 	Pattern   string
 	Reason    string
 	CreatedAt string
+}
+
+type Note struct {
+	ID          int64
+	WorkspaceID int64
+	Title       string
+	BodyMd      string
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 type Sender struct {
@@ -102,6 +146,17 @@ type TelegramSetting struct {
 	ID         int64
 	BotToken   string
 	DigestTime string
+}
+
+type Todo struct {
+	ID          int64
+	WorkspaceID int64
+	Text        string
+	Done        int64
+	DueAt       string
+	SortOrder   int64
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 type Workspace struct {

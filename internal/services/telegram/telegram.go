@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mandloideep/miniclaw/internal/db/sqlcgen"
@@ -182,6 +183,38 @@ func (s *Service) SendTo(ctx context.Context, chatID, text string) error {
 		return fmt.Errorf("telegram: %s", out.Description)
 	}
 	return nil
+}
+
+// NotifySnoozeWake fires a short ping to every recipient assigned to the
+// workspace, telling them a snoozed message is back. The snooze ticker
+// calls this only for needs_attention rows, so cold newsletters don't
+// generate noise on wake.
+func (s *Service) NotifySnoozeWake(ctx context.Context, workspaceID, emailID int64, subject string) error {
+	if subject == "" {
+		subject = "(no subject)"
+	}
+	rows, err := s.q.ListRecipientsForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("workspace recipients: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	text := fmt.Sprintf("⏰ Back from snooze: *%s* (id %d)", escapeMarkdown(subject), emailID)
+	var firstErr error
+	for _, r := range rows {
+		if err := s.SendTo(ctx, r.ChatID, text); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// escapeMarkdown escapes the small subset of characters Telegram's legacy
+// Markdown mode treats as syntax. Conservative — overescaping looks fine.
+func escapeMarkdown(s string) string {
+	r := strings.NewReplacer("_", "\\_", "*", "\\*", "[", "\\[", "`", "\\`")
+	return r.Replace(s)
 }
 
 // Broadcast sends text to every chat in chatIDs, returning the first error

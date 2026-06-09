@@ -20,11 +20,12 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 ### 1.2 Gmail OAuth (S)
 - REST sync via `gmailoauth.Syncer.Sync` + `BackfillBefore` + `SyncNow`.
 - Walks `payload.parts` for inline images (Content-ID) and attachments (Filename), hydrates oversize parts via `attachments.get`, stores via `internal/services/attachments`.
+- Persists every `labelIds` entry into `email_labels` for parity with IMAP flags — Gmail's native labels (CATEGORY_*, IMPORTANT, STARRED, user labels) are no longer discarded.
+- Incremental sync uses `users.history.list` once `accounts.gmail_history_id` is seeded; falls back to the date-bounded `in:inbox after:` query when the cursor is empty or has expired (404), then reseeds from `users.profile.historyId`.
+- `MatchesBlock` runs on every Gmail message before upsert, matching the IMAP path; first-seen senders register with the screener through `Triage.RegisterSender`.
+- Threading headers (`In-Reply-To`, `References`) are captured and pushed through the shared `email.DeriveThreadID` so Gmail-side threading agrees with IMAP rather than relying on Gmail's `threadId`.
 - Still open:
-  - `LabelIds` only mapped to four categories — Gmail's native labels (CATEGORY_PERSONAL, IMPORTANT, STARRED, user labels) are discarded. Persist in a `email_labels(email_id, label)` table; mirror IMAP's `\Flagged`/`\Seen` paths.
-  - No incremental `historyId` cursor — every pass re-lists. Cheap at small scale, will burn quota at large. Implement `users.history.list` once initial sync is done.
   - Gmail returns `Message-ID` with angle brackets; we store as-is and rely on the UNIQUE index to dedupe — verify on accounts that auto-rewrite Message-ID.
-  - MatchesBlock isn't consulted in the Gmail path yet — IMAP is.
 
 ### 1.3 Microsoft OAuth (P)
 - `internal/services/msoauth/sync.go` exists and is wired but parity work mirrors Gmail above.
@@ -59,17 +60,19 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 - Search hits `emails_fts` directly; user input is quoted as a phrase to keep multi-word queries working.
 - Still open: `ListByCategory(workspaceID, category)` for the category drill-downs.
 
-### 2.3 Threading (T)
-- We index by `Message-ID` only. No `In-Reply-To`/`References` walk.
-- Build: add columns `in_reply_to`, `references` and a derived `thread_id` (`COALESCE(References.split[0], Message-ID)`), with an index. Frontend collapses replies under the root.
-- Gotcha: Gmail's `threadId` ≠ RFC References — use ours, treat Gmail's as a sync hint only.
+### 2.3 Threading (S)
+- Migration 0005 adds `in_reply_to`, `email_refs`, `thread_id` to `emails` plus a partial index on `thread_id`.
+- `email.DeriveThreadID` picks the first `References` token, then `In-Reply-To`, then the row's own `Message-ID`. Both the IMAP and Gmail syncers wire it; Gmail's syncer takes the deriver as a function so the package stays free of circular imports.
+- `ListEmailsByThread` is exposed via sqlc for the reader pane's collapse-by-root flow.
+- Gotcha: Gmail's `threadId` ≠ RFC References — we deliberately ignore it and treat the RFC chain as the source of truth.
+- Still open: the inbox list itself doesn't collapse threads yet; rendering still happens row-per-message.
 
-### 2.4 Attachments + inline images (P)
+### 2.4 Attachments + inline images (S)
 - Schema: `email_attachments(email_id, content_id, filename, mime_type, size_bytes, data BLOB, is_inline)` (migration 0004).
 - Gmail sync walks parts, hydrates deferred bodies via `attachments.get`, writes via `attachments.Service.Store`.
+- IMAP sync now does the same: `parseMessage` walks `mail.NextPart`, collects inline (Content-ID) and `AttachmentHeader` parts, and pushes them through the shared `AttachmentStore` interface. RFC 2047 encoded-word filenames are decoded.
 - Reader splices bytes as `data:` URLs inside the sandboxed iframe srcdoc — same-origin policy + the Wails asset handler don't play well with `cid:` rewrites, so inlining sidesteps the whole problem.
 - Still open:
-  - IMAP path doesn't store attachments yet — `parseMessage` discards them. Mirror the Gmail shape: collect parts during `mail.NextPart`, route image/* with Content-ID through `attachments.Service.Store`.
   - File attachments (non-image, non-inline) are stored but no UI surfaces them as downloads yet.
   - Remote-image policy is per-message ("Show images" toggle); per-sender allowlist hasn't landed.
 
@@ -102,14 +105,15 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 
 ### 3.5 Filters / block rules (S)
 - `internal/services/triage` + `views/FiltersView.jsx`.
-- IMAP sync consults `MatchesBlock` before upsert; **Gmail sync doesn't yet** — wire the same check in `gmailoauth/sync.go` before parity ships.
+- Both syncers consult `MatchesBlock` before upsert: IMAP in `imap.go`, Gmail via the `Triage` interface wired with `gmailSync.AttachTriage(triageSvc)` in `main.go`. `RegisterSender` runs on both paths so the screener catches first-seen senders from any provider.
 
 ### 3.6 Put aside (S)
 - One-bit `is_put_aside` flag. Toggled from inbox row. UI: `views/PutAsideView.jsx`.
 
-### 3.7 Snooze (T)
-- Extend put-aside with `snoozed_until TEXT`. A daily ticker un-snoozes; emit a Telegram nudge if `needs_attention`.
-- UI plan: shadcn `DropdownMenu` on the reader with Until tomorrow / Next week / Custom — primitive is already in `components/ui/dropdown-menu.tsx`, wire-up is the remaining work.
+### 3.7 Snooze (S)
+- Migration 0005 adds `emails.snoozed_until` plus a partial index. Inbox queries hide rows whose snooze hasn't fired.
+- `internal/services/snooze` exposes `Snooze`/`Unsnooze`/`ListSnoozed`. A 60s ticker (`snoozeSvc.Start`) clears due rows, then fires `telegram.NotifySnoozeWake` for the ones that have a `needs_attention` summary so cold newsletters wake silently.
+- Reader UI: shadcn `DropdownMenu` with Later today / Tomorrow / Next week / Next month / Wake now. The dedicated **Snoozed** nav view lists everything pending with a "wake now" button.
 
 ### 3.8 Compose / reply (P)
 - `SMTPSender.Send` ships. Plain-text only, quoted body.
@@ -129,21 +133,22 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 
 ---
 
-## 5. Calendar (T)
+## 5. Calendar (P)
 
-- Local time-blocking only; Google sync only for explicitly promoted blocks.
-- Schema: `calendar_blocks(id, workspace_id, title, start, end, kind, google_event_id NULLABLE)`.
-- Promotion path: write block → call Google Calendar API → store `google_event_id` → 2-way sync only for that row.
+- Schema and service shipped (migration 0005, `internal/services/planner/CalendarService`). Local-first time-blocking with `kind` enum (block / meeting / focus) and a nullable `google_event_id`.
+- UI: `views/PlannerView.jsx` ▶ Calendar tab — create, list, delete, and "Promote" stub that sets `google_event_id = "pending:<id>"`.
+- Promotion path against the real Google Calendar API is the remaining work; today Promote is a placeholder so we can iterate on the UI without touching OAuth scopes.
 - Gotchas:
   - Time zones are the entire problem. Store UTC, render in user-local, never split.
   - Google's `recurringEventId` is its own world — start single-event only, add recurrence later.
 
 ---
 
-## 6. Todos + notes (T)
+## 6. Todos + notes (S)
 
-- Lightweight per-workspace. Tables: `todos(id, workspace_id, text, done, due, sort)`, `notes(id, workspace_id, title, body_md, updated_at)`.
-- Frontend: a single right-side panel toggle on the inbox view, not its own tab.
+- Tables: `todos(id, workspace_id, text, done, due_at, sort_order, …)` and `notes(id, workspace_id, title, body_md, …)` in migration 0005.
+- Services: `planner.TodosService` and `planner.NotesService`. Standard CRUD plus a fast `SetDone` path for the row checkbox.
+- UI: tabs alongside the calendar inside `PlannerView` — markdown notes use a list/editor split; todos sort open-first by `sort_order`.
 
 ---
 
@@ -163,11 +168,14 @@ Legend: **S** = shipped · **P** = partial · **T** = to-do.
 ### 7.3 Inbox view (S)
 - HTML body inside sandboxed `<iframe srcdoc>` (allow-same-origin only). Reader has a shadcn `Tabs` toggle for Rendered / Plain text. Inline images splice from the attachments table as data URLs.
 - "Load older" walks the cache; "Fetch 200 older from server" calls `BackfillBefore` for both Gmail and IMAP.
-- Still open: virtualization when count > 200 (use `@tanstack/react-virtual`), thread collapse, snooze affordance.
+- List swaps to `@tanstack/react-virtual` once row count crosses 200 (`VIRTUALIZE_AT` in `InboxView.jsx`); shorter lists stay on the plain mapped layout to keep small-list interactions snappy.
+- Reader has a `DropdownMenu`-driven Snooze control (Later today / Tomorrow / Next week / Next month / Wake now).
+- Still open: thread collapse in the list.
 
 ### 7.4 Settings (P)
 - Sections rendered as shadcn `Card` + `Tabs` + `Input` + `Label`. Add-account flow uses `Tabs` to switch IMAP / Gmail / Microsoft.
-- Missing: image-loading policy, sync cadence picker per account, "default workspace for new account", `AlertDialog` for the destructive delete flows (still uses `window.confirm`).
+- Destructive flows (delete workspace, remove account) gated by shadcn `AlertDialog` instead of `window.confirm`. The wrapper lives in `SettingsView.jsx` as `DestructiveConfirm`.
+- Missing: image-loading policy, sync cadence picker per account, "default workspace for new account".
 
 ### 7.5 Onboarding (T)
 - First-run: pick model from `Ollama.ListModels`, pick default workspace, add first account.

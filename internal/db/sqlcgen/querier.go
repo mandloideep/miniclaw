@@ -6,35 +6,56 @@ package sqlcgen
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
+	AddEmailLabel(ctx context.Context, arg AddEmailLabelParams) error
 	AddFilterRule(ctx context.Context, arg AddFilterRuleParams) (FilterRule, error)
 	ApproveSender(ctx context.Context, id int64) error
 	AssignRecipientToAccount(ctx context.Context, arg AssignRecipientToAccountParams) error
 	AssignRecipientToWorkspace(ctx context.Context, arg AssignRecipientToWorkspaceParams) error
 	BlockSender(ctx context.Context, id int64) error
+	ClearEmailLabels(ctx context.Context, emailID int64) error
+	ClearSnooze(ctx context.Context, id int64) error
+	CreateCalendarBlock(ctx context.Context, arg CreateCalendarBlockParams) (CalendarBlock, error)
 	CreateIMAPAccount(ctx context.Context, arg CreateIMAPAccountParams) (Account, error)
 	CreateMSOAuthAccount(ctx context.Context, arg CreateMSOAuthAccountParams) (Account, error)
+	CreateNote(ctx context.Context, arg CreateNoteParams) (Note, error)
 	CreateOAuthAccount(ctx context.Context, arg CreateOAuthAccountParams) (Account, error)
 	CreateRecipient(ctx context.Context, arg CreateRecipientParams) (TelegramRecipient, error)
+	CreateTodo(ctx context.Context, arg CreateTodoParams) (Todo, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
 	DeleteAccount(ctx context.Context, id int64) error
+	DeleteCalendarBlock(ctx context.Context, id int64) error
 	DeleteFilterRule(ctx context.Context, id int64) error
+	DeleteNote(ctx context.Context, id int64) error
 	DeleteRecipient(ctx context.Context, id int64) error
+	DeleteTodo(ctx context.Context, id int64) error
 	DeleteWorkspace(ctx context.Context, id int64) error
 	GetAccount(ctx context.Context, id int64) (Account, error)
 	GetAccountModel(ctx context.Context, id int64) (GetAccountModelRow, error)
+	GetGmailHistoryID(ctx context.Context, id int64) (string, error)
+	GetNote(ctx context.Context, id int64) (Note, error)
 	GetSenderState(ctx context.Context, arg GetSenderStateParams) (string, error)
 	GetSummaryForEmail(ctx context.Context, emailID int64) (Summary, error)
 	GetTelegramSettings(ctx context.Context) (GetTelegramSettingsRow, error)
 	GetWorkspace(ctx context.Context, id int64) (Workspace, error)
 	ListAccounts(ctx context.Context) ([]Account, error)
 	ListAccountsByWorkspace(ctx context.Context, workspaceID int64) ([]Account, error)
+	// Calendar blocks, todos, and notes — the "planner" surface area for each
+	// workspace. All three are workspace-scoped; nothing here syncs externally
+	// until the calendar promotion path lands.
+	ListCalendarBlocks(ctx context.Context, arg ListCalendarBlocksParams) ([]CalendarBlock, error)
+	// For the snooze ticker. Returns emails whose snoozed_until is <= now.
+	ListDueSnoozed(ctx context.Context, snoozedUntil sql.NullString) ([]ListDueSnoozedRow, error)
+	ListEmailLabels(ctx context.Context, emailID int64) ([]string, error)
 	ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccountParams) ([]ListEmailsByAccountRow, error)
+	ListEmailsByThread(ctx context.Context, threadID string) ([]ListEmailsByThreadRow, error)
 	ListEmailsByWorkspace(ctx context.Context, arg ListEmailsByWorkspaceParams) ([]ListEmailsByWorkspaceRow, error)
 	ListFilterRules(ctx context.Context, accountID int64) ([]FilterRule, error)
 	ListNeedsAttentionSince(ctx context.Context, generatedAt string) ([]ListNeedsAttentionSinceRow, error)
+	ListNotes(ctx context.Context, workspaceID int64) ([]Note, error)
 	ListPutAsideByWorkspace(ctx context.Context, workspaceID int64) ([]ListPutAsideByWorkspaceRow, error)
 	ListRecipients(ctx context.Context) ([]TelegramRecipient, error)
 	ListRecipientsForAccount(ctx context.Context, accountID int64) ([]ListRecipientsForAccountRow, error)
@@ -42,6 +63,8 @@ type Querier interface {
 	// given account, so callers can fire a notify with one query.
 	ListRecipientsForFanout(ctx context.Context, accountID int64) ([]ListRecipientsForFanoutRow, error)
 	ListRecipientsForWorkspace(ctx context.Context, workspaceID int64) ([]ListRecipientsForWorkspaceRow, error)
+	ListSnoozedByWorkspace(ctx context.Context, workspaceID int64) ([]ListSnoozedByWorkspaceRow, error)
+	ListTodos(ctx context.Context, workspaceID int64) ([]Todo, error)
 	// Senders the screener hasn't decided on yet, with the email that prompted them.
 	ListUnscreenedByAccount(ctx context.Context, accountID int64) ([]ListUnscreenedByAccountRow, error)
 	ListUnsummarizedByAccount(ctx context.Context, arg ListUnsummarizedByAccountParams) ([]ListUnsummarizedByAccountRow, error)
@@ -49,10 +72,14 @@ type Querier interface {
 	MarkEmailRead(ctx context.Context, id int64) error
 	MarkEmailUnread(ctx context.Context, id int64) error
 	MaxUIDForFolder(ctx context.Context, arg MaxUIDForFolderParams) (int64, error)
+	NextTodoSort(ctx context.Context, workspaceID int64) (int64, error)
 	ReorderWorkspace(ctx context.Context, arg ReorderWorkspaceParams) error
+	SetCalendarGoogleEvent(ctx context.Context, arg SetCalendarGoogleEventParams) error
 	SetCategory(ctx context.Context, arg SetCategoryParams) error
 	SetDigestTime(ctx context.Context, digestTime string) error
+	SetSnooze(ctx context.Context, arg SetSnoozeParams) error
 	SetTelegramBotToken(ctx context.Context, botToken string) error
+	SetTodoDone(ctx context.Context, arg SetTodoDoneParams) error
 	TogglePutAside(ctx context.Context, id int64) error
 	UnassignRecipientFromAccount(ctx context.Context, arg UnassignRecipientFromAccountParams) error
 	UnassignRecipientFromWorkspace(ctx context.Context, arg UnassignRecipientFromWorkspaceParams) error
@@ -60,7 +87,11 @@ type Querier interface {
 	UpdateAccountFetchSince(ctx context.Context, arg UpdateAccountFetchSinceParams) error
 	UpdateAccountModel(ctx context.Context, arg UpdateAccountModelParams) error
 	UpdateAccountSync(ctx context.Context, id int64) error
+	UpdateCalendarBlock(ctx context.Context, arg UpdateCalendarBlockParams) error
 	UpdateFolderAllowlist(ctx context.Context, arg UpdateFolderAllowlistParams) error
+	UpdateGmailHistoryID(ctx context.Context, arg UpdateGmailHistoryIDParams) error
+	UpdateNote(ctx context.Context, arg UpdateNoteParams) error
+	UpdateTodo(ctx context.Context, arg UpdateTodoParams) error
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) error
 	UpsertEmail(ctx context.Context, arg UpsertEmailParams) (int64, error)
 	UpsertSender(ctx context.Context, arg UpsertSenderParams) error

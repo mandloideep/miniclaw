@@ -13,16 +13,19 @@ import (
 
 // Email is the list-row shape used by the inbox view.
 type Email struct {
-	ID          int64  `json:"id"`
-	AccountID   int64  `json:"accountId"`
-	FromAddress string `json:"fromAddress"`
-	FromName    string `json:"fromName"`
-	Subject     string `json:"subject"`
-	ReceivedAt  string `json:"receivedAt"`
-	BodyPlain   string `json:"bodyPlain"`
-	IsRead      bool   `json:"isRead"`
-	IsPutAside  bool   `json:"isPutAside"`
-	Category    string `json:"category"`
+	ID              int64  `json:"id"`
+	AccountID       int64  `json:"accountId"`
+	FromAddress     string `json:"fromAddress"`
+	FromName        string `json:"fromName"`
+	Subject         string `json:"subject"`
+	ReceivedAt      string `json:"receivedAt"`
+	BodyPlain       string `json:"bodyPlain"`
+	IsRead          bool   `json:"isRead"`
+	IsPutAside      bool   `json:"isPutAside"`
+	Category        string `json:"category"`
+	Summary         string `json:"summary,omitempty"`
+	NeedsAttention  bool   `json:"needsAttention,omitempty"`
+	AttentionReason string `json:"attentionReason,omitempty"`
 }
 
 // EmailDetail is the reader-pane shape. Includes HTML, recipients, and a
@@ -64,7 +67,10 @@ func (s *Service) ListByWorkspace(ctx context.Context, workspaceID, limit int64)
 			Subject: r.Subject, ReceivedAt: r.ReceivedAt,
 			BodyPlain: r.BodyPlain,
 			IsRead:    r.IsRead == 1, IsPutAside: r.IsPutAside == 1,
-			Category: r.Category,
+			Category:        r.Category,
+			Summary:         r.Summary,
+			NeedsAttention:  r.NeedsAttention == 1,
+			AttentionReason: r.AttentionReason,
 		})
 	}
 	return out, nil
@@ -90,7 +96,10 @@ func (s *Service) ListByAccount(ctx context.Context, accountID, limit int64) ([]
 			Subject: r.Subject, ReceivedAt: r.ReceivedAt,
 			BodyPlain: r.BodyPlain,
 			IsRead:    r.IsRead == 1, IsPutAside: r.IsPutAside == 1,
-			Category: r.Category,
+			Category:        r.Category,
+			Summary:         r.Summary,
+			NeedsAttention:  r.NeedsAttention == 1,
+			AttentionReason: r.AttentionReason,
 		})
 	}
 	return out, nil
@@ -102,22 +111,29 @@ func (s *Service) ListByAccount(ctx context.Context, accountID, limit int64) ([]
 // churn than it's worth.
 func (s *Service) Get(ctx context.Context, id int64) (EmailDetail, error) {
 	const q = `
-		SELECT id, account_id, from_address, from_name, to_addresses, cc_addresses,
-		       subject, received_at, body_plain, body_html, headers_json,
-		       is_read, is_put_aside, category
-		FROM emails WHERE id = ? LIMIT 1`
+		SELECT e.id, e.account_id, e.from_address, e.from_name, e.to_addresses, e.cc_addresses,
+		       e.subject, e.received_at, e.body_plain, e.body_html, e.headers_json,
+		       e.is_read, e.is_put_aside, e.category,
+		       COALESCE(s.summary, ''),
+		       COALESCE(s.needs_attention, 0),
+		       COALESCE(s.attention_reason, '')
+		FROM emails e
+		LEFT JOIN summaries s ON s.email_id = e.id
+		WHERE e.id = ? LIMIT 1`
 	var d EmailDetail
-	var isRead, isPutAside int64
+	var isRead, isPutAside, needs int64
 	row := s.pool.QueryRowContext(ctx, q, id)
 	if err := row.Scan(
 		&d.ID, &d.AccountID, &d.FromAddress, &d.FromName, &d.To, &d.Cc,
 		&d.Subject, &d.ReceivedAt, &d.BodyPlain, &d.BodyHTML, &d.Headers,
 		&isRead, &isPutAside, &d.Category,
+		&d.Summary, &needs, &d.AttentionReason,
 	); err != nil {
 		return EmailDetail{}, fmt.Errorf("get email %d: %w", id, err)
 	}
 	d.IsRead = isRead == 1
 	d.IsPutAside = isPutAside == 1
+	d.NeedsAttention = needs == 1
 	return d, nil
 }
 
@@ -133,9 +149,13 @@ func (s *Service) ListOlderByWorkspace(ctx context.Context, workspaceID int64, b
 	}
 	const q = `
 		SELECT e.id, e.account_id, e.from_address, e.from_name, e.subject,
-		       e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category
+		       e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category,
+		       COALESCE(s.summary, ''),
+		       COALESCE(s.needs_attention, 0),
+		       COALESCE(s.attention_reason, '')
 		FROM emails e
 		JOIN accounts a ON a.id = e.account_id
+		LEFT JOIN summaries s ON s.email_id = e.id
 		WHERE a.workspace_id = ? AND e.received_at < ?
 		ORDER BY e.received_at DESC
 		LIMIT ?`
@@ -147,16 +167,18 @@ func (s *Service) ListOlderByWorkspace(ctx context.Context, workspaceID int64, b
 	out := make([]Email, 0, int(limit))
 	for rows.Next() {
 		var e Email
-		var isRead, isPutAside int64
+		var isRead, isPutAside, needs int64
 		if err := rows.Scan(
 			&e.ID, &e.AccountID, &e.FromAddress, &e.FromName,
 			&e.Subject, &e.ReceivedAt, &e.BodyPlain,
 			&isRead, &isPutAside, &e.Category,
+			&e.Summary, &needs, &e.AttentionReason,
 		); err != nil {
 			return nil, fmt.Errorf("scan older email: %w", err)
 		}
 		e.IsRead = isRead == 1
 		e.IsPutAside = isPutAside == 1
+		e.NeedsAttention = needs == 1
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -178,10 +200,14 @@ func (s *Service) Search(ctx context.Context, workspaceID int64, q string, limit
 	phrase := `"` + strings.ReplaceAll(q, `"`, `""`) + `"`
 	const sqlQ = `
 SELECT e.id, e.account_id, e.from_address, e.from_name, e.subject,
-       e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category
+       e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category,
+       COALESCE(sm.summary, ''),
+       COALESCE(sm.needs_attention, 0),
+       COALESCE(sm.attention_reason, '')
 FROM emails_fts f
 JOIN emails e ON e.id = f.rowid
 JOIN accounts a ON a.id = e.account_id
+LEFT JOIN summaries sm ON sm.email_id = e.id
 WHERE a.workspace_id = ? AND emails_fts MATCH ?
 ORDER BY e.received_at DESC
 LIMIT ?`
@@ -193,16 +219,18 @@ LIMIT ?`
 	out := make([]Email, 0, int(limit))
 	for rows.Next() {
 		var e Email
-		var isRead, isPutAside int64
+		var isRead, isPutAside, needs int64
 		if err := rows.Scan(
 			&e.ID, &e.AccountID, &e.FromAddress, &e.FromName,
 			&e.Subject, &e.ReceivedAt, &e.BodyPlain,
 			&isRead, &isPutAside, &e.Category,
+			&e.Summary, &needs, &e.AttentionReason,
 		); err != nil {
 			return nil, fmt.Errorf("scan search row: %w", err)
 		}
 		e.IsRead = isRead == 1
 		e.IsPutAside = isPutAside == 1
+		e.NeedsAttention = needs == 1
 		out = append(out, e)
 	}
 	return out, rows.Err()

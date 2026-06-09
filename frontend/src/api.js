@@ -19,6 +19,12 @@ import {
   Syncer as MSSync,
 } from "../bindings/github.com/mandloideep/miniclaw/internal/services/msoauth";
 import { Service as Ollama } from "../bindings/github.com/mandloideep/miniclaw/internal/services/ollama";
+import {
+  CalendarService as Calendar,
+  NotesService as Notes,
+  TodosService as Todos,
+} from "../bindings/github.com/mandloideep/miniclaw/internal/services/planner";
+import { Service as Snooze } from "../bindings/github.com/mandloideep/miniclaw/internal/services/snooze";
 import { Service as Telegram } from "../bindings/github.com/mandloideep/miniclaw/internal/services/telegram";
 import { Service as Triage } from "../bindings/github.com/mandloideep/miniclaw/internal/services/triage";
 import { Service as Workspaces } from "../bindings/github.com/mandloideep/miniclaw/internal/services/workspace";
@@ -31,15 +37,19 @@ const MSOAuth = { ...MSAuth, ...MSSync };
 export {
   Accounts,
   Attachments,
+  Calendar,
   Digest,
   GmailOAuth,
   IMAPSync,
   Inbox,
   Keychain,
   MSOAuth,
+  Notes,
   Ollama,
   SMTPSender,
+  Snooze,
   Telegram,
+  Todos,
   Triage,
   Workspaces,
 };

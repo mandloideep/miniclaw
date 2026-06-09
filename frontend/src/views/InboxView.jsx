@@ -1,5 +1,7 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
+  Clock,
   CornerUpLeft,
   Image as ImageIcon,
   ImageOff,
@@ -11,9 +13,25 @@ import {
   Send,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Attachments, GmailOAuth, IMAPSync, Inbox as InboxApi, SMTPSender, Triage } from "../api";
+import {
+  Attachments,
+  GmailOAuth,
+  IMAPSync,
+  Inbox as InboxApi,
+  SMTPSender,
+  Snooze,
+  Triage,
+} from "../api";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Separator } from "../components/ui/separator";
@@ -21,6 +39,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { Textarea } from "../components/ui/textarea";
 
 const PAGE = 80;
+// Above this row count the list switches to virtualization. Below it,
+// keeping the static markup is simpler and avoids the off-by-pixel
+// jankiness that windowing introduces on tiny lists.
+const VIRTUALIZE_AT = 200;
+const ROW_HEIGHT_PX = 76;
 
 export default function InboxView({ workspace, accounts, openEmailId, onEmailOpened }) {
   const [emails, setEmails] = useState([]);
@@ -136,64 +159,125 @@ export default function InboxView({ workspace, accounts, openEmailId, onEmailOpe
             </Button>
           </div>
         </div>
-        <ScrollArea className="flex-1">
-          <ul className="p-1.5">
-            {emails.map((e) => (
-              <EmailRow
-                key={e.id}
-                email={e}
-                active={selectedId === e.id}
-                onClick={() => {
-                  setSelectedId(e.id);
-                  if (!e.isRead) {
-                    InboxApi.MarkRead(e.id).then(() => {
-                      setEmails((prev) =>
-                        prev.map((row) => (row.id === e.id ? { ...row, isRead: true } : row)),
-                      );
-                    });
-                  }
-                }}
-              />
-            ))}
-          </ul>
-          <div className="px-3 pb-4 pt-1 flex flex-col gap-2 items-stretch">
-            {!reachedEnd && (
-              <Button size="sm" variant="secondary" onClick={loadOlder} disabled={loadingOlder}>
-                {loadingOlder ? (
-                  <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                )}
-                {loadingOlder ? "Loading…" : "Load older messages"}
-              </Button>
-            )}
-            {accounts.some((a) => a.authKind === "gmail_oauth" || a.authKind === "imap") && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={backfillFromServer}
-                disabled={backfilling}
-                title="Pull the next 200 messages older than the oldest one shown"
-              >
-                {backfilling ? (
-                  <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                )}
-                {backfilling ? "Fetching older…" : "Fetch 200 older from server"}
-              </Button>
-            )}
-            {reachedEnd && (
-              <p className="text-[11px] text-ink-tertiary text-center">
-                You've reached the oldest cached message.
-              </p>
-            )}
-          </div>
-        </ScrollArea>
+        <EmailList
+          emails={emails}
+          selectedId={selectedId}
+          onSelect={(id) => {
+            setSelectedId(id);
+            const e = emails.find((x) => x.id === id);
+            if (e && !e.isRead) {
+              InboxApi.MarkRead(id).then(() => {
+                setEmails((prev) =>
+                  prev.map((row) => (row.id === id ? { ...row, isRead: true } : row)),
+                );
+              });
+            }
+          }}
+          footer={
+            <div className="px-3 pb-4 pt-1 flex flex-col gap-2 items-stretch">
+              {!reachedEnd && (
+                <Button size="sm" variant="secondary" onClick={loadOlder} disabled={loadingOlder}>
+                  {loadingOlder ? (
+                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                  {loadingOlder ? "Loading…" : "Load older messages"}
+                </Button>
+              )}
+              {accounts.some((a) => a.authKind === "gmail_oauth" || a.authKind === "imap") && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={backfillFromServer}
+                  disabled={backfilling}
+                  title="Pull the next 200 messages older than the oldest one shown"
+                >
+                  {backfilling ? (
+                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                  {backfilling ? "Fetching older…" : "Fetch 200 older from server"}
+                </Button>
+              )}
+              {reachedEnd && (
+                <p className="text-[11px] text-ink-tertiary text-center">
+                  You've reached the oldest cached message.
+                </p>
+              )}
+            </div>
+          }
+        />
       </section>
       <section className="flex-1 min-w-0 flex flex-col">
         <EmailReader detail={detail} onPutAside={refresh} />
       </section>
+    </div>
+  );
+}
+
+// EmailList swaps between a plain mapped list and @tanstack/react-virtual
+// once the row count crosses VIRTUALIZE_AT. The virtualizer needs an
+// outer scrolling element to measure against — we mount one with the
+// list filling it and the footer rendered below the windowed area so
+// "load older" stays reachable.
+function EmailList({ emails, selectedId, onSelect, footer }) {
+  const parentRef = useRef(null);
+  const virtualizer = useVirtualizer({
+    count: emails.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT_PX,
+    overscan: 8,
+  });
+  const useVirtual = emails.length >= VIRTUALIZE_AT;
+
+  if (!useVirtual) {
+    return (
+      <ScrollArea className="flex-1">
+        <ul className="p-1.5">
+          {emails.map((e) => (
+            <EmailRow
+              key={e.id}
+              email={e}
+              active={selectedId === e.id}
+              onClick={() => onSelect(e.id)}
+            />
+          ))}
+        </ul>
+        {footer}
+      </ScrollArea>
+    );
+  }
+
+  const items = virtualizer.getVirtualItems();
+  return (
+    <div ref={parentRef} className="flex-1 overflow-auto">
+      <div className="relative" style={{ height: `${virtualizer.getTotalSize()}px`, padding: 6 }}>
+        {items.map((v) => {
+          const e = emails[v.index];
+          if (!e) return null;
+          return (
+            <div
+              key={e.id}
+              data-index={v.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                transform: `translateY(${v.start}px)`,
+              }}
+            >
+              <ul className="px-1.5">
+                <EmailRow email={e} active={selectedId === e.id} onClick={() => onSelect(e.id)} />
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+      {footer}
     </div>
   );
 }
@@ -255,11 +339,28 @@ function EmailRow({ email, active, onClick }) {
 function EmailReader({ detail, onPutAside }) {
   const [replying, setReplying] = useState(false);
   const [showImages, setShowImages] = useState(false);
+  const [snoozeBusy, setSnoozeBusy] = useState(false);
 
   useEffect(() => {
     setReplying(false);
     setShowImages(false);
   }, []);
+
+  const handleSnooze = useCallback(
+    async (kind) => {
+      if (!detail) return;
+      const until = nextSnoozeAt(kind);
+      if (!until) return;
+      setSnoozeBusy(true);
+      try {
+        await Snooze.Snooze(detail.id, until);
+        onPutAside?.();
+      } finally {
+        setSnoozeBusy(false);
+      }
+    },
+    [detail, onPutAside],
+  );
 
   if (!detail) {
     return (
@@ -318,6 +419,47 @@ function EmailReader({ detail, onPutAside }) {
               )}
               {detail.isPutAside ? "Unstash" : "Put aside"}
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" disabled={snoozeBusy}>
+                  {snoozeBusy ? (
+                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Clock className="w-3.5 h-3.5" />
+                  )}
+                  Snooze
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Hide until</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => handleSnooze("later-today")}>
+                  Later today
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleSnooze("tomorrow")}>
+                  Tomorrow morning
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleSnooze("next-week")}>
+                  Next week
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleSnooze("next-month")}>
+                  Next month
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={async () => {
+                    setSnoozeBusy(true);
+                    try {
+                      await Snooze.Unsnooze(detail.id);
+                      onPutAside?.();
+                    } finally {
+                      setSnoozeBusy(false);
+                    }
+                  }}
+                >
+                  Wake now
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             {!replying && (
               <Button size="sm" onClick={() => setReplying(true)}>
                 <CornerUpLeft className="w-3.5 h-3.5" />
@@ -544,6 +686,36 @@ function Empty({ icon: Icon, title, children }) {
   );
 }
 
+// nextSnoozeAt resolves the dropdown choice into an RFC3339 UTC timestamp.
+// "Later today" snoozes 3 hours forward (or to 9 PM, whichever is sooner)
+// so a morning click doesn't bounce back into the inbox before lunch.
+function nextSnoozeAt(kind) {
+  const now = new Date();
+  let target = new Date(now);
+  if (kind === "later-today") {
+    target.setHours(now.getHours() + 3, 0, 0, 0);
+    const ninePM = new Date(now);
+    ninePM.setHours(21, 0, 0, 0);
+    if (target > ninePM) target = ninePM;
+  } else if (kind === "tomorrow") {
+    target.setDate(now.getDate() + 1);
+    target.setHours(9, 0, 0, 0);
+  } else if (kind === "next-week") {
+    const daysUntilMon = (1 - now.getDay() + 7) % 7 || 7;
+    target.setDate(now.getDate() + daysUntilMon);
+    target.setHours(9, 0, 0, 0);
+  } else if (kind === "next-month") {
+    target.setMonth(now.getMonth() + 1, 1);
+    target.setHours(9, 0, 0, 0);
+  } else {
+    return null;
+  }
+  // Backend requires a future timestamp; nudge it forward if we somehow
+  // computed something <= now (clock skew, sub-second rounding).
+  if (target <= now) target = new Date(now.getTime() + 60_000);
+  return target.toISOString();
+}
+
 function formatStamp(iso, withTime = false) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -551,7 +723,10 @@ function formatStamp(iso, withTime = false) {
   const now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
   if (sameDay && !withTime) {
-    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return d.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
   }
   if (withTime) {
     return d.toLocaleString(undefined, {

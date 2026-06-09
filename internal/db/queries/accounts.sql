@@ -2,7 +2,7 @@
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       folder_allowlist, created_at, updated_at
+       folder_allowlist, created_at, updated_at, gmail_history_id
 FROM accounts
 ORDER BY workspace_id, id;
 
@@ -10,7 +10,7 @@ ORDER BY workspace_id, id;
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       folder_allowlist, created_at, updated_at
+       folder_allowlist, created_at, updated_at, gmail_history_id
 FROM accounts
 WHERE workspace_id = ?
 ORDER BY id;
@@ -19,7 +19,7 @@ ORDER BY id;
 SELECT id, workspace_id, display_name, email_address, auth_kind,
        imap_host, imap_port, smtp_host, smtp_port, secret_ref,
        fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-       folder_allowlist, created_at, updated_at
+       folder_allowlist, created_at, updated_at, gmail_history_id
 FROM accounts
 WHERE id = ?;
 
@@ -32,7 +32,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          folder_allowlist, created_at, updated_at;
+          folder_allowlist, created_at, updated_at, gmail_history_id;
 
 -- name: CreateOAuthAccount :one
 INSERT INTO accounts (
@@ -42,7 +42,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          folder_allowlist, created_at, updated_at;
+          folder_allowlist, created_at, updated_at, gmail_history_id;
 
 -- name: CreateMSOAuthAccount :one
 INSERT INTO accounts (
@@ -52,7 +52,7 @@ INSERT INTO accounts (
 RETURNING id, workspace_id, display_name, email_address, auth_kind,
           imap_host, imap_port, smtp_host, smtp_port, secret_ref,
           fetch_since, sync_cadence_secs, last_synced_at, ollama_model,
-          folder_allowlist, created_at, updated_at;
+          folder_allowlist, created_at, updated_at, gmail_history_id;
 
 -- name: UpdateFolderAllowlist :exec
 UPDATE accounts SET folder_allowlist = ?, updated_at = datetime('now') WHERE id = ?;
@@ -79,3 +79,9 @@ WHERE id = ?;
 
 -- name: DeleteAccount :exec
 DELETE FROM accounts WHERE id = ?;
+
+-- name: UpdateGmailHistoryID :exec
+UPDATE accounts SET gmail_history_id = ?, updated_at = datetime('now') WHERE id = ?;
+
+-- name: GetGmailHistoryID :one
+SELECT gmail_history_id FROM accounts WHERE id = ?;

@@ -1,11 +1,55 @@
 import { useCallback, useEffect, useState } from "react";
 import { Accounts, Digest, GmailOAuth, MSOAuth, Ollama, Telegram, Workspaces } from "../api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
+
+// DestructiveConfirm wraps the standard "are you sure" + cancel/confirm
+// flow so call sites stay tiny. Renders the trigger inline (it's a slot)
+// and only calls onConfirm when the action button is clicked.
+function DestructiveConfirm({ trigger, title, description, confirmLabel = "Remove", onConfirm }) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          {description && <AlertDialogDescription>{description}</AlertDialogDescription>}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button variant="ghost" size="sm">
+              Cancel
+            </Button>
+          </AlertDialogCancel>
+          <AlertDialogAction asChild>
+            <Button
+              size="sm"
+              onClick={onConfirm}
+              className="bg-danger/15 text-danger hover:bg-danger/25"
+            >
+              {confirmLabel}
+            </Button>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
 
 export default function SettingsView({
   workspaces,
@@ -58,18 +102,20 @@ function WorkspacesSection({ workspaces, onChange }) {
               {/* eslint-disable-next-line react/no-array-index-key */}
               {workspaces.length === 1 ? "default" : "workspace"}
             </Badge>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={async () => {
-                if (!window.confirm(`Delete workspace "${w.name}"?`)) return;
+            <DestructiveConfirm
+              title={`Delete workspace "${w.name}"?`}
+              description="Accounts inside it and their cached email also go. This can't be undone."
+              confirmLabel="Delete workspace"
+              onConfirm={async () => {
                 await Workspaces.Delete(w.id);
                 onChange();
               }}
-              className="text-ink-subtle hover:text-danger"
-            >
-              Remove
-            </Button>
+              trigger={
+                <Button variant="ghost" size="xs" className="text-ink-subtle hover:text-danger">
+                  Remove
+                </Button>
+              }
+            />
           </li>
         ))}
       </ul>
@@ -137,17 +183,20 @@ function AccountsSection({ workspaces, accounts, onChange }) {
                   {a.ollamaModel || "(default)"}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!window.confirm(`Remove ${a.emailAddress}?`)) return;
+              <DestructiveConfirm
+                title={`Remove ${a.emailAddress}?`}
+                description="Cached emails and the keychain secret are removed locally. The mailbox on the provider stays untouched."
+                confirmLabel="Remove account"
+                onConfirm={async () => {
                   await Accounts.Delete(a.id);
                   onChange();
                 }}
-                className="text-xs text-ink-subtle hover:text-danger"
-              >
-                remove
-              </button>
+                trigger={
+                  <button type="button" className="text-xs text-ink-subtle hover:text-danger">
+                    remove
+                  </button>
+                }
+              />
             </li>
           );
         })}

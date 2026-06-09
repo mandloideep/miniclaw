@@ -10,10 +10,14 @@ import (
 
 func TestStatus_OK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/version" {
+		switch r.URL.Path {
+		case "/api/version":
+			_ = json.NewEncoder(w).Encode(map[string]string{"version": "0.5.1"})
+		case "/api/ps":
+			_, _ = w.Write([]byte(`{"models":[{"name":"llama3.2:3b"}]}`))
+		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"version": "0.5.1"})
 	}))
 	t.Cleanup(srv.Close)
 
@@ -21,6 +25,9 @@ func TestStatus_OK(t *testing.T) {
 	got := s.Status(context.Background())
 	if !got.Running || got.Version != "0.5.1" {
 		t.Fatalf("unexpected: %+v", got)
+	}
+	if len(got.LoadedModels) != 1 || got.LoadedModels[0] != "llama3.2:3b" {
+		t.Fatalf("loaded models: %+v", got.LoadedModels)
 	}
 }
 

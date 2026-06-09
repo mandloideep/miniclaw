@@ -123,9 +123,12 @@ func (s *Scheduler) runOnce(ctx context.Context, accountID int64) {
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	// Bound a single sync at 5 minutes so a hung connection doesn't wedge
-	// the per-account loop forever.
-	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Bound a single sync+summarise at 20 minutes. Sync itself rarely
+	// touches the wire for more than a minute, but a cold Ollama load on
+	// a larger model can spend 1-3 minutes on the first generate before
+	// it produces a token. The old 5-min ceiling cut summaries off
+	// mid-flight, which the user saw as silent "no summary ever appears".
+	runCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	if err := s.sync(runCtx, accountID); err != nil {
 		log.Printf("scheduler: sync account %d: %v", accountID, err)

@@ -10,13 +10,127 @@ import (
 	"database/sql"
 )
 
+const addEmailLabel = `-- name: AddEmailLabel :exec
+INSERT INTO email_labels (email_id, label) VALUES (?, ?)
+ON CONFLICT(email_id, label) DO NOTHING
+`
+
+type AddEmailLabelParams struct {
+	EmailID int64
+	Label   string
+}
+
+func (q *Queries) AddEmailLabel(ctx context.Context, arg AddEmailLabelParams) error {
+	_, err := q.db.ExecContext(ctx, addEmailLabel, arg.EmailID, arg.Label)
+	return err
+}
+
+const clearEmailLabels = `-- name: ClearEmailLabels :exec
+DELETE FROM email_labels WHERE email_id = ?
+`
+
+func (q *Queries) ClearEmailLabels(ctx context.Context, emailID int64) error {
+	_, err := q.db.ExecContext(ctx, clearEmailLabels, emailID)
+	return err
+}
+
+const clearSnooze = `-- name: ClearSnooze :exec
+UPDATE emails SET snoozed_until = NULL WHERE id = ?
+`
+
+func (q *Queries) ClearSnooze(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, clearSnooze, id)
+	return err
+}
+
+const listDueSnoozed = `-- name: ListDueSnoozed :many
+SELECT e.id, e.account_id, e.subject, e.snoozed_until,
+       s.needs_attention, a.workspace_id
+FROM emails e
+JOIN accounts a ON a.id = e.account_id
+LEFT JOIN summaries s ON s.email_id = e.id
+WHERE e.snoozed_until IS NOT NULL AND e.snoozed_until <= ?
+`
+
+type ListDueSnoozedRow struct {
+	ID             int64
+	AccountID      int64
+	Subject        string
+	SnoozedUntil   sql.NullString
+	NeedsAttention sql.NullInt64
+	WorkspaceID    int64
+}
+
+// For the snooze ticker. Returns emails whose snoozed_until is <= now.
+func (q *Queries) ListDueSnoozed(ctx context.Context, snoozedUntil sql.NullString) ([]ListDueSnoozedRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDueSnoozed, snoozedUntil)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDueSnoozedRow{}
+	for rows.Next() {
+		var i ListDueSnoozedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Subject,
+			&i.SnoozedUntil,
+			&i.NeedsAttention,
+			&i.WorkspaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmailLabels = `-- name: ListEmailLabels :many
+SELECT label FROM email_labels WHERE email_id = ? ORDER BY label
+`
+
+func (q *Queries) ListEmailLabels(ctx context.Context, emailID int64) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listEmailLabels, emailID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		items = append(items, label)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEmailsByAccount = `-- name: ListEmailsByAccount :many
-SELECT id, account_id, message_id, folder, uid,
-       from_address, from_name, to_addresses, cc_addresses,
-       subject, received_at, body_plain, is_read, is_put_aside, category
-FROM emails
-WHERE account_id = ?
-ORDER BY received_at DESC
+SELECT e.id, e.account_id, e.message_id, e.folder, e.uid,
+       e.from_address, e.from_name, e.to_addresses, e.cc_addresses,
+       e.subject, e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category,
+       COALESCE(s.summary, '')          AS summary,
+       COALESCE(s.needs_attention, 0)   AS needs_attention,
+       COALESCE(s.attention_reason, '') AS attention_reason
+FROM emails e
+LEFT JOIN summaries s ON s.email_id = e.id
+WHERE e.account_id = ?
+  AND (e.snoozed_until IS NULL OR e.snoozed_until <= datetime('now'))
+ORDER BY e.received_at DESC
 LIMIT ?
 `
 
@@ -26,21 +140,24 @@ type ListEmailsByAccountParams struct {
 }
 
 type ListEmailsByAccountRow struct {
-	ID          int64
-	AccountID   int64
-	MessageID   string
-	Folder      string
-	Uid         sql.NullInt64
-	FromAddress string
-	FromName    string
-	ToAddresses string
-	CcAddresses string
-	Subject     string
-	ReceivedAt  string
-	BodyPlain   string
-	IsRead      int64
-	IsPutAside  int64
-	Category    string
+	ID              int64
+	AccountID       int64
+	MessageID       string
+	Folder          string
+	Uid             sql.NullInt64
+	FromAddress     string
+	FromName        string
+	ToAddresses     string
+	CcAddresses     string
+	Subject         string
+	ReceivedAt      string
+	BodyPlain       string
+	IsRead          int64
+	IsPutAside      int64
+	Category        string
+	Summary         string
+	NeedsAttention  int64
+	AttentionReason string
 }
 
 func (q *Queries) ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccountParams) ([]ListEmailsByAccountRow, error) {
@@ -68,6 +185,64 @@ func (q *Queries) ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccou
 			&i.IsRead,
 			&i.IsPutAside,
 			&i.Category,
+			&i.Summary,
+			&i.NeedsAttention,
+			&i.AttentionReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmailsByThread = `-- name: ListEmailsByThread :many
+SELECT id, account_id, from_address, from_name, subject, received_at,
+       body_plain, is_read, is_put_aside, category
+FROM emails
+WHERE thread_id = ?
+ORDER BY received_at ASC
+`
+
+type ListEmailsByThreadRow struct {
+	ID          int64
+	AccountID   int64
+	FromAddress string
+	FromName    string
+	Subject     string
+	ReceivedAt  string
+	BodyPlain   string
+	IsRead      int64
+	IsPutAside  int64
+	Category    string
+}
+
+func (q *Queries) ListEmailsByThread(ctx context.Context, threadID string) ([]ListEmailsByThreadRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEmailsByThread, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEmailsByThreadRow{}
+	for rows.Next() {
+		var i ListEmailsByThreadRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.FromAddress,
+			&i.FromName,
+			&i.Subject,
+			&i.ReceivedAt,
+			&i.BodyPlain,
+			&i.IsRead,
+			&i.IsPutAside,
+			&i.Category,
 		); err != nil {
 			return nil, err
 		}
@@ -85,10 +260,15 @@ func (q *Queries) ListEmailsByAccount(ctx context.Context, arg ListEmailsByAccou
 const listEmailsByWorkspace = `-- name: ListEmailsByWorkspace :many
 SELECT e.id, e.account_id, e.message_id, e.folder, e.uid,
        e.from_address, e.from_name, e.to_addresses, e.cc_addresses,
-       e.subject, e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category
+       e.subject, e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category,
+       COALESCE(s.summary, '')          AS summary,
+       COALESCE(s.needs_attention, 0)   AS needs_attention,
+       COALESCE(s.attention_reason, '') AS attention_reason
 FROM emails e
 JOIN accounts a ON a.id = e.account_id
+LEFT JOIN summaries s ON s.email_id = e.id
 WHERE a.workspace_id = ?
+  AND (e.snoozed_until IS NULL OR e.snoozed_until <= datetime('now'))
 ORDER BY e.received_at DESC
 LIMIT ?
 `
@@ -99,21 +279,24 @@ type ListEmailsByWorkspaceParams struct {
 }
 
 type ListEmailsByWorkspaceRow struct {
-	ID          int64
-	AccountID   int64
-	MessageID   string
-	Folder      string
-	Uid         sql.NullInt64
-	FromAddress string
-	FromName    string
-	ToAddresses string
-	CcAddresses string
-	Subject     string
-	ReceivedAt  string
-	BodyPlain   string
-	IsRead      int64
-	IsPutAside  int64
-	Category    string
+	ID              int64
+	AccountID       int64
+	MessageID       string
+	Folder          string
+	Uid             sql.NullInt64
+	FromAddress     string
+	FromName        string
+	ToAddresses     string
+	CcAddresses     string
+	Subject         string
+	ReceivedAt      string
+	BodyPlain       string
+	IsRead          int64
+	IsPutAside      int64
+	Category        string
+	Summary         string
+	NeedsAttention  int64
+	AttentionReason string
 }
 
 func (q *Queries) ListEmailsByWorkspace(ctx context.Context, arg ListEmailsByWorkspaceParams) ([]ListEmailsByWorkspaceRow, error) {
@@ -141,6 +324,9 @@ func (q *Queries) ListEmailsByWorkspace(ctx context.Context, arg ListEmailsByWor
 			&i.IsRead,
 			&i.IsPutAside,
 			&i.Category,
+			&i.Summary,
+			&i.NeedsAttention,
+			&i.AttentionReason,
 		); err != nil {
 			return nil, err
 		}
@@ -211,6 +397,56 @@ func (q *Queries) ListNeedsAttentionSince(ctx context.Context, generatedAt strin
 	return items, nil
 }
 
+const listSnoozedByWorkspace = `-- name: ListSnoozedByWorkspace :many
+SELECT e.id, e.account_id, e.from_address, e.from_name, e.subject,
+       e.received_at, e.snoozed_until
+FROM emails e
+JOIN accounts a ON a.id = e.account_id
+WHERE a.workspace_id = ? AND e.snoozed_until IS NOT NULL
+ORDER BY e.snoozed_until ASC
+`
+
+type ListSnoozedByWorkspaceRow struct {
+	ID           int64
+	AccountID    int64
+	FromAddress  string
+	FromName     string
+	Subject      string
+	ReceivedAt   string
+	SnoozedUntil sql.NullString
+}
+
+func (q *Queries) ListSnoozedByWorkspace(ctx context.Context, workspaceID int64) ([]ListSnoozedByWorkspaceRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSnoozedByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSnoozedByWorkspaceRow{}
+	for rows.Next() {
+		var i ListSnoozedByWorkspaceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.FromAddress,
+			&i.FromName,
+			&i.Subject,
+			&i.ReceivedAt,
+			&i.SnoozedUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markEmailRead = `-- name: MarkEmailRead :exec
 UPDATE emails SET is_read = 1 WHERE id = ?
 `
@@ -261,6 +497,20 @@ func (q *Queries) SetCategory(ctx context.Context, arg SetCategoryParams) error 
 	return err
 }
 
+const setSnooze = `-- name: SetSnooze :exec
+UPDATE emails SET snoozed_until = ? WHERE id = ?
+`
+
+type SetSnoozeParams struct {
+	SnoozedUntil sql.NullString
+	ID           int64
+}
+
+func (q *Queries) SetSnooze(ctx context.Context, arg SetSnoozeParams) error {
+	_, err := q.db.ExecContext(ctx, setSnooze, arg.SnoozedUntil, arg.ID)
+	return err
+}
+
 const togglePutAside = `-- name: TogglePutAside :exec
 UPDATE emails SET is_put_aside = 1 - is_put_aside WHERE id = ?
 `
@@ -274,14 +524,18 @@ const upsertEmail = `-- name: UpsertEmail :one
 INSERT INTO emails (
     account_id, message_id, folder, uid,
     from_address, from_name, to_addresses, cc_addresses,
-    subject, received_at, body_plain, body_html, headers_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    subject, received_at, body_plain, body_html, headers_json,
+    in_reply_to, email_refs, thread_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account_id, message_id) DO UPDATE SET
     folder       = excluded.folder,
     uid          = excluded.uid,
     body_plain   = excluded.body_plain,
     body_html    = excluded.body_html,
-    headers_json = excluded.headers_json
+    headers_json = excluded.headers_json,
+    in_reply_to  = excluded.in_reply_to,
+    email_refs   = excluded.email_refs,
+    thread_id    = excluded.thread_id
 RETURNING id
 `
 
@@ -299,6 +553,9 @@ type UpsertEmailParams struct {
 	BodyPlain   string
 	BodyHtml    string
 	HeadersJson string
+	InReplyTo   string
+	EmailRefs   string
+	ThreadID    string
 }
 
 func (q *Queries) UpsertEmail(ctx context.Context, arg UpsertEmailParams) (int64, error) {
@@ -316,6 +573,9 @@ func (q *Queries) UpsertEmail(ctx context.Context, arg UpsertEmailParams) (int64
 		arg.BodyPlain,
 		arg.BodyHtml,
 		arg.HeadersJson,
+		arg.InReplyTo,
+		arg.EmailRefs,
+		arg.ThreadID,
 	)
 	var id int64
 	err := row.Scan(&id)

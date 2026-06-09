@@ -42,11 +42,14 @@ type Summarizer struct {
 }
 
 // New wires the summariser against the shared pool and an Ollama client.
+// Batch size is small on purpose: local models can take 5-30s per email
+// on a cold load, so a single scheduler tick stays responsive instead of
+// blocking for minutes the first time a user opens the app.
 func New(pool *sql.DB, llm Generator) *Summarizer {
 	return &Summarizer{
 		q:     sqlcgen.New(pool),
 		llm:   llm,
-		batch: 25,
+		batch: 8,
 	}
 }
 

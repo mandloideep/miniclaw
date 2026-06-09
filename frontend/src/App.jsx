@@ -2,6 +2,8 @@ import { Events } from "@wailsio/runtime";
 import {
   AtSign,
   Bell,
+  CalendarDays,
+  Clock,
   Cog,
   Filter,
   Inbox as InboxIcon,
@@ -23,16 +25,20 @@ import { Separator } from "./components/ui/separator";
 import CategoriesView from "./views/CategoriesView";
 import FiltersView from "./views/FiltersView";
 import InboxView from "./views/InboxView";
+import PlannerView from "./views/PlannerView";
 import PutAsideView from "./views/PutAsideView";
 import ScreenerView from "./views/ScreenerView";
 import SettingsView from "./views/SettingsView";
+import SnoozedView from "./views/SnoozedView";
 
 const NAV = [
   { id: "inbox", label: "Inbox", icon: InboxIcon },
   { id: "put-aside", label: "Put aside", icon: PauseCircle },
+  { id: "snoozed", label: "Snoozed", icon: Clock },
   { id: "screener", label: "Screener", icon: Users },
   { id: "filters", label: "Filters", icon: Filter },
   { id: "categories", label: "Categories", icon: Tag },
+  { id: "planner", label: "Planner", icon: CalendarDays },
 ];
 
 export default function App() {
@@ -194,6 +200,11 @@ export default function App() {
                 <PutAsideView workspace={activeWorkspace} />
               </PaneShell>
             )}
+            {nav === "snoozed" && (
+              <PaneShell title="Snoozed" subtitle="Hidden until their wake time.">
+                <SnoozedView workspace={activeWorkspace} />
+              </PaneShell>
+            )}
             {nav === "screener" && (
               <PaneShell title="Screener" subtitle="First-time senders waiting on a decision.">
                 <ScreenerView accounts={activeAccounts} />
@@ -207,6 +218,14 @@ export default function App() {
             {nav === "categories" && (
               <PaneShell title="Categories" subtitle="Promotions, social, updates, newsletters.">
                 <CategoriesView workspace={activeWorkspace} accounts={activeAccounts} />
+              </PaneShell>
+            )}
+            {nav === "planner" && (
+              <PaneShell
+                title="Planner"
+                subtitle="Calendar blocks, todos, notes — workspace-local."
+              >
+                <PlannerView workspace={activeWorkspace} />
               </PaneShell>
             )}
           </main>
