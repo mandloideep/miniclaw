@@ -23,6 +23,10 @@ build: ## Build the production app
 bindings: ## Generate Go <-> JS bindings
 	wails3 generate bindings
 
+.PHONY: sqlc
+sqlc: ## Regenerate sqlc Go from internal/db/queries
+	sqlc generate
+
 ## --- Deps ---
 
 .PHONY: deps

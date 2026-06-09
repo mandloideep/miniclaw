@@ -1,0 +1,2 @@
+# Per-service .sql query files land here. Run `sqlc generate` to regenerate
+# Go bindings in internal/db/sqlcgen/.
