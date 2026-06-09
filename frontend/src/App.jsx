@@ -1,3 +1,4 @@
+import { Events } from "@wailsio/runtime";
 import {
   AtSign,
   Bell,
@@ -14,7 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Accounts, GmailOAuth, Keychain, MSOAuth, Ollama, Workspaces } from "./api";
+import { Accounts, GmailOAuth, IMAPSync, Keychain, MSOAuth, Ollama, Workspaces } from "./api";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Separator } from "./components/ui/separator";
@@ -42,6 +43,7 @@ export default function App() {
   const [keychainOk, setKeychainOk] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncToast, setSyncToast] = useState(null);
 
   const refreshWorkspaces = useCallback(async () => {
     const ws = await Workspaces.List();
@@ -62,6 +64,25 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshWorkspaces, refreshAccounts]);
 
+  useEffect(() => {
+    // Live ingest status. Scheduler emits start → done/error per account.
+    // We let "done" toasts fade after a few seconds; errors stick until
+    // the next event replaces them.
+    let fadeT;
+    const off = Events.On("sync_progress", (ev) => {
+      const p = ev?.data?.[0] ?? ev?.data ?? {};
+      clearTimeout(fadeT);
+      setSyncToast(p);
+      if (p?.phase === "done") {
+        fadeT = setTimeout(() => setSyncToast(null), 4000);
+      }
+    });
+    return () => {
+      clearTimeout(fadeT);
+      off?.();
+    };
+  }, []);
+
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId) ?? null,
     [workspaces, activeWorkspaceId],
@@ -80,7 +101,7 @@ export default function App() {
         activeAccounts.map(async (a) => {
           if (a.authKind === "gmail_oauth") await GmailOAuth.SyncNow(a.id).catch(() => {});
           if (a.authKind === "ms_oauth") await MSOAuth.Sync?.(a.id).catch(() => {});
-          // IMAP sync is driven by the scheduler; no manual hook yet.
+          if (a.authKind === "imap") await IMAPSync.SyncNow(a.id).catch(() => {});
         }),
       );
     } finally {
@@ -97,6 +118,7 @@ export default function App() {
         ollama={ollamaStatus}
         keychainOk={keychainOk}
         syncing={syncing}
+        syncToast={syncToast}
         onSync={syncAll}
         onSettings={() => setShowSettings(true)}
       />
@@ -163,9 +185,20 @@ function TopBar({
   ollama,
   keychainOk,
   syncing,
+  syncToast,
   onSync,
   onSettings,
 }) {
+  const toastLabel = useMemo(() => {
+    if (!syncToast) return null;
+    const who = syncToast.emailAddress || `account ${syncToast.accountId}`;
+    if (syncToast.phase === "start") return `Syncing ${who}…`;
+    if (syncToast.phase === "done") {
+      return syncToast.written > 0 ? `${syncToast.written} new from ${who}` : `${who} up to date`;
+    }
+    if (syncToast.phase === "error") return `Sync failed for ${who}`;
+    return null;
+  }, [syncToast]);
   return (
     <header className="flex items-center gap-3 px-4 h-14 border-b border-hairline bg-canvas">
       <div className="flex items-center gap-2 pr-3">
@@ -177,6 +210,22 @@ function TopBar({
       <Separator orientation="vertical" className="h-6" />
       <WorkspaceStrip workspaces={workspaces} activeId={activeWorkspaceId} onPick={onPick} />
       <div className="ml-auto flex items-center gap-2">
+        {toastLabel && (
+          <span
+            className={
+              "hidden md:inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full border " +
+              (syncToast?.phase === "error"
+                ? "border-danger/40 text-danger bg-danger/10"
+                : syncToast?.phase === "done"
+                  ? "border-success/40 text-success bg-success/10"
+                  : "border-brand-focus/40 text-brand bg-brand/10")
+            }
+            title={syncToast?.err || toastLabel}
+          >
+            {syncToast?.phase === "start" && <LoaderCircle className="w-3 h-3 animate-spin" />}
+            {toastLabel}
+          </span>
+        )}
         <StatusPill
           ok={ollama?.running}
           label={ollama?.running ? "Ollama online" : "Ollama offline"}

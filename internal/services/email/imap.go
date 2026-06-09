@@ -228,6 +228,143 @@ func (s *IMAPSyncer) syncFolder(ctx context.Context, c *imapclient.Client, accou
 	return written, nil
 }
 
+// SyncNow is exposed to the frontend so the UI can trigger an immediate
+// pass without waiting for the scheduler tick.
+func (s *IMAPSyncer) SyncNow(ctx context.Context, accountID int64) (int, error) {
+	return s.Sync(ctx, accountID)
+}
+
+// BackfillBefore pulls historical messages strictly older than `before`
+// (RFC3339 or YYYY-MM-DD), capped at maxMessages per folder. Used by the
+// frontend's 'fetch older' button on IMAP accounts. Re-runs over every
+// folder in the per-account allowlist; dedupe is on (account_id, message_id).
+func (s *IMAPSyncer) BackfillBefore(ctx context.Context, accountID int64, before string, maxMessages int) (int, error) {
+	if maxMessages <= 0 || maxMessages > 1000 {
+		maxMessages = 200
+	}
+	acc, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	if acc.AuthKind != account.AuthIMAP {
+		return 0, fmt.Errorf("account %d is not IMAP", accountID)
+	}
+	beforeT, err := parseFetchSince(before)
+	if err != nil {
+		return 0, fmt.Errorf("before: %w", err)
+	}
+	pwd, err := s.accounts.Password(ctx, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("load password: %w", err)
+	}
+	addr := fmt.Sprintf("%s:%d", acc.IMAPHost, acc.IMAPPort)
+	c, err := s.dialTLS(addr, &imapclient.Options{
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: acc.IMAPHost},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("dial %s: %w", addr, err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Login(acc.EmailAddress, pwd).Wait(); err != nil {
+		return 0, fmt.Errorf("login: %w", err)
+	}
+	defer func() { _ = c.Logout().Wait() }()
+
+	total := 0
+	for _, folder := range pickFolders(acc.FolderAllowlist) {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		n, err := s.backfillFolder(ctx, c, accountID, folder, beforeT, maxMessages-total)
+		if err != nil {
+			fmt.Printf("imap backfill: account %d folder %s: %v\n", accountID, folder, err)
+			continue
+		}
+		total += n
+		if total >= maxMessages {
+			break
+		}
+	}
+	return total, nil
+}
+
+// backfillFolder selects the folder and fetches up to maxRemaining
+// messages with internal date strictly before beforeT.
+func (s *IMAPSyncer) backfillFolder(ctx context.Context, c *imapclient.Client, accountID int64, folder string, beforeT time.Time, maxRemaining int) (int, error) {
+	if maxRemaining <= 0 {
+		return 0, nil
+	}
+	if _, err := c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+		return 0, fmt.Errorf("select %s: %w", folder, err)
+	}
+	criteria := &imap.SearchCriteria{Before: beforeT}
+	searchData, err := c.UIDSearch(criteria, nil).Wait()
+	if err != nil {
+		return 0, fmt.Errorf("uid search: %w", err)
+	}
+	uids := searchData.AllUIDs()
+	if len(uids) == 0 {
+		return 0, nil
+	}
+	// Newest-first inside the older-than window: helpful when the user
+	// is gradually scrolling back through time.
+	for i, j := 0, len(uids)-1; i < j; i, j = i+1, j-1 {
+		uids[i], uids[j] = uids[j], uids[i]
+	}
+	if len(uids) > maxRemaining {
+		uids = uids[:maxRemaining]
+	}
+	uidSet := imap.UIDSet{}
+	for _, u := range uids {
+		uidSet.AddNum(u)
+	}
+	bodySection := &imap.FetchItemBodySection{}
+	msgs, err := c.Fetch(uidSet, &imap.FetchOptions{
+		UID: true, Envelope: true, Flags: true,
+		BodySection: []*imap.FetchItemBodySection{bodySection},
+	}).Collect()
+	if err != nil {
+		return 0, fmt.Errorf("fetch: %w", err)
+	}
+	written := 0
+	for _, msg := range msgs {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		raw := msg.FindBodySection(bodySection)
+		plain, htmlBody, headers := parseMessage(raw)
+		hdrJSON, _ := json.Marshal(headers)
+		from := firstAddress(msg.Envelope.From)
+		to := joinAddresses(msg.Envelope.To)
+		cc := joinAddresses(msg.Envelope.Cc)
+		id, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
+			AccountID:   accountID,
+			MessageID:   msg.Envelope.MessageID,
+			Folder:      folder,
+			Uid:         sql.NullInt64{Int64: int64(msg.UID), Valid: true},
+			FromAddress: from.address,
+			FromName:    from.name,
+			ToAddresses: to,
+			CcAddresses: cc,
+			Subject:     msg.Envelope.Subject,
+			ReceivedAt:  msg.Envelope.Date.UTC().Format(time.RFC3339),
+			BodyPlain:   plain,
+			BodyHtml:    htmlBody,
+			HeadersJson: string(hdrJSON),
+		})
+		if err != nil {
+			return written, fmt.Errorf("upsert message %s: %w", msg.Envelope.MessageID, err)
+		}
+		if s.classify != nil {
+			if cat := s.classify(from.address, headers["List-Unsubscribe"]); cat != "" {
+				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{Category: cat, ID: id})
+			}
+		}
+		written++
+	}
+	return written, nil
+}
+
 // parseFetchSince accepts ISO date (YYYY-MM-DD) or RFC3339 timestamps.
 func parseFetchSince(v string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, v); err == nil {

@@ -3,7 +3,10 @@
 
 import { Service as Accounts } from "../bindings/github.com/mandloideep/miniclaw/internal/services/account";
 import { Service as Digest } from "../bindings/github.com/mandloideep/miniclaw/internal/services/digest";
-import { SMTPSender } from "../bindings/github.com/mandloideep/miniclaw/internal/services/email";
+import {
+  IMAPSyncer as IMAPSync,
+  SMTPSender,
+} from "../bindings/github.com/mandloideep/miniclaw/internal/services/email";
 import {
   Service as GmailAuth,
   Syncer as GmailSync,
@@ -28,6 +31,7 @@ export {
   Accounts,
   Digest,
   GmailOAuth,
+  IMAPSync,
   Inbox,
   Keychain,
   MSOAuth,

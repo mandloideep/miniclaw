@@ -11,7 +11,7 @@ import {
   Send,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { GmailOAuth, Inbox as InboxApi, SMTPSender, Triage } from "../api";
+import { GmailOAuth, IMAPSync, Inbox as InboxApi, SMTPSender, Triage } from "../api";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -79,15 +79,21 @@ export default function InboxView({ workspace, accounts }) {
   }, [workspace, oldestReceivedAt, loadingOlder]);
 
   const backfillFromServer = useCallback(async () => {
-    const gmailAccounts = accounts.filter((a) => a.authKind === "gmail_oauth");
-    if (!gmailAccounts.length || backfilling) return;
+    const remoteAccounts = accounts.filter(
+      (a) => a.authKind === "gmail_oauth" || a.authKind === "imap",
+    );
+    if (!remoteAccounts.length || backfilling) return;
     const before = oldestReceivedAt
       ? oldestReceivedAt.slice(0, 10)
       : new Date().toISOString().slice(0, 10);
     setBackfilling(true);
     try {
       await Promise.all(
-        gmailAccounts.map((a) => GmailOAuth.BackfillBefore(a.id, before, 200).catch(() => 0)),
+        remoteAccounts.map((a) => {
+          if (a.authKind === "gmail_oauth")
+            return GmailOAuth.BackfillBefore(a.id, before, 200).catch(() => 0);
+          return IMAPSync.BackfillBefore(a.id, before, 200).catch(() => 0);
+        }),
       );
       await refresh();
     } finally {
@@ -153,20 +159,20 @@ export default function InboxView({ workspace, accounts }) {
                 {loadingOlder ? "Loading…" : "Load older messages"}
               </Button>
             )}
-            {accounts.some((a) => a.authKind === "gmail_oauth") && (
+            {accounts.some((a) => a.authKind === "gmail_oauth" || a.authKind === "imap") && (
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={backfillFromServer}
                 disabled={backfilling}
-                title="Pull the next 200 messages before the oldest one shown, straight from Gmail"
+                title="Pull the next 200 messages older than the oldest one shown"
               >
                 {backfilling ? (
                   <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <ChevronDown className="w-3.5 h-3.5" />
                 )}
-                {backfilling ? "Fetching from Gmail…" : "Fetch 200 older from Gmail"}
+                {backfilling ? "Fetching older…" : "Fetch 200 older from server"}
               </Button>
             )}
             {reachedEnd && (

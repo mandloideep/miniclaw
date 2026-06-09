@@ -28,6 +28,12 @@ type Generator interface {
 	Generate(ctx context.Context, req ollama.GenerateRequest) (string, error)
 }
 
+// errorReporter is satisfied by *ollama.Service. Optional — used to stash
+// the last LLM error so the status banner can show it.
+type errorReporter interface {
+	SetLastError(string)
+}
+
 // Summarizer runs the per-account summarization pass.
 type Summarizer struct {
 	q     *sqlcgen.Queries
@@ -69,30 +75,58 @@ func (s *Summarizer) Summarize(ctx context.Context, accountID int64) (int, error
 	}
 
 	written := 0
+	var (
+		consecutiveFail int
+		firstErr        error
+		failCount       int
+	)
 	for _, r := range rows {
 		if err := ctx.Err(); err != nil {
 			return written, err
 		}
 		out, err := s.summarizeOne(ctx, model, r)
 		if err != nil {
-			log.Printf("summary: email %d: %v", r.ID, err)
+			if firstErr == nil {
+				firstErr = err
+				log.Printf("summary: email %d: %v", r.ID, err)
+			}
+			failCount++
+			consecutiveFail++
+			// Bail when the model is clearly not producing usable output
+			// (warming, wrong model, refused, etc.) — saves quota and
+			// stops log spam without retry storms.
+			if consecutiveFail >= 3 {
+				log.Printf("summary: aborting batch after %d consecutive failures (model=%s)", consecutiveFail, model)
+				break
+			}
 			continue
 		}
+		consecutiveFail = 0
 		needs := int64(0)
 		if out.NeedsAttention {
 			needs = 1
 		}
-		if err := s.q.UpsertSummary(ctx, sqlcgen.UpsertSummaryParams{
+		if perr := s.q.UpsertSummary(ctx, sqlcgen.UpsertSummaryParams{
 			EmailID:         r.ID,
 			Summary:         out.Summary,
 			NeedsAttention:  needs,
 			AttentionReason: out.Reason,
 			Model:           model,
-		}); err != nil {
-			log.Printf("summary: persist email %d: %v", r.ID, err)
+		}); perr != nil {
+			log.Printf("summary: persist email %d: %v", r.ID, perr)
 			continue
 		}
 		written++
+	}
+	if failCount > 1 {
+		log.Printf("summary: %d total failures in this batch (first surfaced above)", failCount)
+	}
+	if reporter, ok := s.llm.(errorReporter); ok {
+		if firstErr != nil {
+			reporter.SetLastError(fmt.Sprintf("%s: %v", model, firstErr))
+		} else if written > 0 {
+			reporter.SetLastError("")
+		}
 	}
 	return written, nil
 }
@@ -104,7 +138,9 @@ type llmOutput struct {
 }
 
 // summarizeOne builds the structured prompt, asks Ollama for JSON, and
-// decodes the reply.
+// decodes the reply. Falls back to a no-format-json retry once if the
+// model refused under JSON mode — small instruct models sometimes return
+// empty responses when forced to JSON.
 func (s *Summarizer) summarizeOne(ctx context.Context, model string, r sqlcgen.ListUnsummarizedByAccountRow) (llmOutput, error) {
 	body := truncate(r.BodyPlain, 4000) // keep small models happy
 	prompt := buildPrompt(r.FromName, r.FromAddress, r.Subject, r.ReceivedAt, body)
@@ -115,17 +151,45 @@ func (s *Summarizer) summarizeOne(ctx context.Context, model string, r sqlcgen.L
 		Temperature: 0.2,
 		JSONMode:    true,
 	})
+	if err != nil && strings.Contains(err.Error(), "empty response") {
+		// Retry without JSON mode. We extract the first {...} below.
+		resp, err = s.llm.Generate(ctx, ollama.GenerateRequest{
+			Model:       model,
+			System:      systemPrompt,
+			Prompt:      prompt,
+			Temperature: 0.2,
+		})
+	}
 	if err != nil {
 		return llmOutput{}, err
 	}
+	jsonChunk := extractJSON(resp)
 	var out llmOutput
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
-		return llmOutput{}, fmt.Errorf("decode llm json: %w (raw=%q)", err, resp)
+	if err := json.Unmarshal([]byte(jsonChunk), &out); err != nil {
+		// Truncate raw payload so logs stay readable.
+		truncated := resp
+		if len(truncated) > 200 {
+			truncated = truncated[:200] + "…"
+		}
+		return llmOutput{}, fmt.Errorf("decode llm json: %w (raw=%q)", err, truncated)
 	}
 	if out.Summary == "" {
 		return llmOutput{}, fmt.Errorf("empty summary from llm")
 	}
 	return out, nil
+}
+
+// extractJSON pulls the first balanced {...} block out of a model reply.
+// Small instruct models routinely wrap the JSON in prose like
+// "Sure, here's the summary: {...}". Returns the original string if no
+// brace pair is found.
+func extractJSON(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end <= start {
+		return s
+	}
+	return s[start : end+1]
 }
 
 const systemPrompt = `You are an email triage assistant. For every email,

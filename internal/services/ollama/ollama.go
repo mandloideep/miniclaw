@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -34,15 +35,19 @@ type Model struct {
 
 // Status is the frontend-facing snapshot of Ollama's reachability.
 type Status struct {
-	Running bool   `json:"running"`
-	Version string `json:"version,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Running   bool   `json:"running"`
+	Version   string `json:"version,omitempty"`
+	Error     string `json:"error,omitempty"`
+	LastError string `json:"lastError,omitempty"` // most recent generate failure, if any
 }
 
 // Service is the Wails-registered Ollama client.
 type Service struct {
 	baseURL string
 	client  *http.Client
+
+	errMu   sync.RWMutex
+	lastErr string
 }
 
 // New returns a Service pointed at DefaultBaseURL with a 60s default timeout
@@ -74,7 +79,7 @@ func (s *Service) Status(ctx context.Context) Status {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return Status{Running: false, Error: fmt.Sprintf("decode version: %v", err)}
 	}
-	return Status{Running: true, Version: body.Version}
+	return Status{Running: true, Version: body.Version, LastError: s.LastError()}
 }
 
 // ListModels returns installed models (`ollama list` equivalent).
@@ -154,16 +159,49 @@ func (s *Service) Generate(ctx context.Context, req GenerateRequest) (string, er
 	defer func() { _ = resp.Body.Close() }()
 
 	var out struct {
-		Response string `json:"response"`
-		Done     bool   `json:"done"`
+		Response   string `json:"response"`
+		Done       bool   `json:"done"`
+		DoneReason string `json:"done_reason"`
+		Error      string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", fmt.Errorf("decode generate: %w", err)
 	}
+	if out.Error != "" {
+		return "", fmt.Errorf("ollama: %s", out.Error)
+	}
 	if !out.Done {
 		return "", errors.New("ollama: generate did not complete")
 	}
+	// An empty response with done=true means the model loaded (or hit a
+	// content guard) without producing anything. Surface a real error so
+	// the caller knows to skip / retry / fall back, instead of handing back
+	// "" and forcing every downstream JSON decoder to fail.
+	if out.Response == "" {
+		reason := out.DoneReason
+		if reason == "" {
+			reason = "no response"
+		}
+		return "", fmt.Errorf("ollama: empty response (done_reason=%s)", reason)
+	}
 	return out.Response, nil
+}
+
+// LastError holds the most recent generate error the service saw, for
+// surfacing in the status banner. Empty when the last call succeeded.
+func (s *Service) LastError() string {
+	s.errMu.RLock()
+	defer s.errMu.RUnlock()
+	return s.lastErr
+}
+
+// SetLastError stores an error string for retrieval by Status. Internal
+// use — Generate doesn't write here itself, the caller decides what's
+// worth surfacing (since transient retries shouldn't pollute the UI).
+func (s *Service) SetLastError(msg string) {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	s.lastErr = msg
 }
 
 func (s *Service) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {

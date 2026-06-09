@@ -33,10 +33,22 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// SyncProgress is the payload of the "sync_progress" event the backend
+// fires whenever an account sync starts, finishes, or fails. The status
+// bar subscribes to it and shows a live "syncing N/N" pill.
+type SyncProgress struct {
+	AccountID    int64  `json:"accountId"`
+	EmailAddress string `json:"emailAddress"`
+	Phase        string `json:"phase"` // "start" | "done" | "error"
+	Written      int    `json:"written,omitempty"`
+	Err          string `json:"err,omitempty"`
+}
+
 func init() {
 	// Registering events at init makes them visible to the binding generator,
 	// so the frontend gets typed wrappers for free.
 	application.RegisterEvent[string]("time")
+	application.RegisterEvent[SyncProgress]("sync_progress")
 }
 
 func main() {
@@ -124,21 +136,31 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		app.Event.Emit("sync_progress", SyncProgress{
+			AccountID: accountID, EmailAddress: acc.EmailAddress, Phase: "start",
+		})
+		written := 0
+		var syncErr error
 		switch acc.AuthKind {
 		case account.AuthIMAP:
-			if _, e := imapSyncer.Sync(c, accountID); e != nil {
-				return e
-			}
+			written, syncErr = imapSyncer.Sync(c, accountID)
 		case account.AuthGmailOAuth:
-			if _, e := gmailSync.Sync(c, accountID); e != nil {
-				return e
-			}
+			written, syncErr = gmailSync.Sync(c, accountID)
 		case account.AuthMSOAuth:
-			if _, e := msSync.Sync(c, accountID); e != nil {
-				return e
-			}
+			written, syncErr = msSync.Sync(c, accountID)
+		}
+		if syncErr != nil {
+			app.Event.Emit("sync_progress", SyncProgress{
+				AccountID: accountID, EmailAddress: acc.EmailAddress,
+				Phase: "error", Err: syncErr.Error(),
+			})
+			return syncErr
 		}
 		_, _ = summarizer.Summarize(c, accountID)
+		app.Event.Emit("sync_progress", SyncProgress{
+			AccountID: accountID, EmailAddress: acc.EmailAddress,
+			Phase: "done", Written: written,
+		})
 		return nil
 	})
 	go sched.Start(schedCtx)
