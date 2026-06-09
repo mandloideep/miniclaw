@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.fallow.tools/schema/config.json",
+  "project": {
+    "name": "miniclaw-frontend",
+    "root": ".",
+    "tsconfig": "./tsconfig.json"
+  },
+  "entry": ["src/main.jsx", "index.html", "vite.config.js"],
+  "ignorePatterns": [
+    "bindings/**",
+    "dist/**",
+    "node_modules/**",
+    ".fallow/**",
+    "src/components/ui/**",
+    "src/vite-env.d.ts"
+  ],
+  "publicApi": {
+    "patterns": []
+  },
+  "health": {
+    "complexity": {
+      "cyclomatic": 15,
+      "cognitive": 20
+    }
+  }
+}
