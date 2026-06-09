@@ -443,6 +443,40 @@ function OllamaSection({ status }) {
   );
 }
 
+function DigestRunButton() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  return (
+    <div className="ml-2 flex items-center gap-2">
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setResult(null);
+          try {
+            await Digest.RunNow();
+            setResult({ ok: true, msg: "Digest sent." });
+          } catch (err) {
+            setResult({ ok: false, msg: String(err?.message || err) });
+          } finally {
+            setBusy(false);
+            setTimeout(() => setResult(null), 4000);
+          }
+        }}
+      >
+        {busy ? "Sending…" : "Send test digest now"}
+      </Button>
+      {result && (
+        <span className={`text-[11px] ${result.ok ? "text-ink-subtle" : "text-rose-400"}`}>
+          {result.msg}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function TelegramSection({ accounts, workspaces }) {
   const [settings, setSettings] = useState({
     botToken: "",
@@ -482,13 +516,7 @@ function TelegramSection({ accounts, workspaces }) {
             className="mt-1 w-32 px-2 py-1.5 bg-surface-2 border border-hairline-strong rounded text-sm"
           />
         </label>
-        <button
-          type="button"
-          onClick={() => Digest.RunNow()}
-          className="ml-2 px-3 py-1.5 rounded bg-surface-2 text-xs hover:bg-surface-3"
-        >
-          Send test digest now
-        </button>
+        <DigestRunButton />
       </div>
 
       <h3 className="text-xs text-ink-subtle uppercase mt-4 mb-1">Recipients</h3>
