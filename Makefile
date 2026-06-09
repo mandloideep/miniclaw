@@ -16,8 +16,22 @@ help: ## Show this help
 ## --- Dev ---
 
 .PHONY: dev
-dev: doctor ## Run Wails v3 dev server (hot-reload)
+dev: doctor stop ## Run Wails v3 dev server (hot-reload)
 	wails3 dev -config ./build/config.yml
+
+.PHONY: stop
+stop: ## Kill any stray dev processes (vite, wails3 dev, miniclaw window)
+	@pids=$$(lsof -ti :9245 2>/dev/null); \
+	if [ -n "$$pids" ]; then \
+	  echo "freeing port 9245 (pids: $$pids)"; \
+	  ps -o pid= -p $$pids | xargs -I {} sh -c 'p=$$(ps -o ppid= -p {} | tr -d " "); kill $$p 2>/dev/null; kill {} 2>/dev/null' ; \
+	fi
+	@pkill -f "wails3 dev" 2>/dev/null || true
+	@pkill -f "bin/miniclaw" 2>/dev/null || true
+	@sleep 1
+	@if lsof -ti :9245 >/dev/null 2>&1; then \
+	  echo "WARNING: port 9245 still held; check 'lsof -i :9245'"; exit 1; \
+	fi
 
 .PHONY: doctor
 doctor: ## Sanity-check the build setup (catches stale plists, missing tools)
