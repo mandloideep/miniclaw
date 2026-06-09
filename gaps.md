@@ -23,10 +23,11 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 - [x] **Search.** Inbox-pane search input wired to `Inbox.Search`.
 - [x] **Compose new mail.** Pencil button in the inbox header opens a Dialog
       with from-account picker, To/Cc/Subject/Body. Sends via SMTPSender.Send.
-- [ ] **Attachments.** Compose still has no attachment upload. Reply has none
-      either. `Attachments` service exposes Get/GetInline but no Upload yet.
+- [x] **Attachments.** `OutgoingMessage.attachments` lands as
+      `multipart/mixed` parts in the RFC822 envelope. Compose dialog has a
+      file picker that base64-encodes each file before send.
 - [ ] **Calendar promote → Google.** `planner.go` still writes
-      `"pending:ID"`. Real Google sync is unimplemented on both sides.
+      `"pending:ID"`. See note below.
 
 ## Genuinely unbuilt (both sides)
 
@@ -37,15 +38,23 @@ Living punch list. Items marked `[x]` are done; `[ ]` are still open.
 - [x] **Todos.** Due-date input on the form, six filter buttons, and sorted
       by dueAt ascending. Overdue rows tinted red.
 - [x] **Calendar conflict detection.** Overlapping blocks are tinted red
-      and list the conflicting block titles. Timezone handling still local-only.
-- [x] **Notes.** Markdown preview tab (tiny inline renderer for headings,
-      bold/italic, lists, fenced code, links). FTS within workspace still
-      missing.
+      and list the conflicting block titles. Timezone handling still
+      local-only.
+- [x] **Notes markdown preview.** Tab toggles between editor and a tiny
+      inline renderer (headings, bold/italic, lists, fenced code, links).
+- [x] **Notes search.** `NotesService.Search` runs a workspace-scoped LIKE
+      query; NotesPane shows a search input above the list.
 
-## Remaining order of attack
+## Deferred — needs its own session
 
-1. Calendar conflict detection (small lift, big UX win).
-2. Notes FTS (search across notes via SQLite FTS5).
-3. Attachment upload binding + UI (Compose/Reply file picker).
-4. Gmail incremental sync (scalability cliff, but invisible until then).
-5. Real Google Calendar 2-way sync (OAuth flow + provider work — biggest).
+- [ ] **Google Calendar 2-way sync.** Genuinely substantial work and out of
+      scope for a single sweep:
+  - The current Gmail OAuth scope set doesn't include
+    `https://www.googleapis.com/auth/calendar.events`. Adding it forces every
+    Gmail-OAuth account through re-consent.
+  - Need a calendar client (`events.list`, `events.insert`, `events.update`,
+    `events.delete`) and a sync watermark separate from `gmail_history_id`.
+  - Need to decide: pull-only (mirror Google → local), push-only (promote
+    local → Google), or true 2-way with last-writer-wins.
+  - `planner.go:100-108` should stay as a stub until those decisions land.
+  Treat this as its own ticket, not a gap to chip at.
