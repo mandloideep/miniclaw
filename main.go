@@ -15,6 +15,7 @@ import (
 	"github.com/mandloideep/miniclaw/internal/db"
 	"github.com/mandloideep/miniclaw/internal/scheduler"
 	"github.com/mandloideep/miniclaw/internal/services/account"
+	"github.com/mandloideep/miniclaw/internal/services/categories"
 	"github.com/mandloideep/miniclaw/internal/services/digest"
 	"github.com/mandloideep/miniclaw/internal/services/email"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
@@ -53,7 +54,10 @@ func run() error {
 
 	accountSvc := account.New(pool)
 	triageSvc := triage.New(pool)
-	imapSyncer := email.NewIMAPSyncer(pool, accountSvc, triageSvc)
+	catEngine := categories.New(pool)
+	imapSyncer := email.NewIMAPSyncer(pool, accountSvc, triageSvc, func(from, unsub string) string {
+		return string(categories.Classify(from, unsub))
+	})
 	smtpSender := email.NewSMTPSender(accountSvc)
 	llm := ollama.New()
 	summarizer := summary.New(pool, llm)
@@ -75,6 +79,7 @@ func run() error {
 			application.NewService(tg),
 			application.NewService(digestSvc),
 			application.NewService(triageSvc),
+			application.NewService(catEngine),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

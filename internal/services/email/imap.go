@@ -27,23 +27,29 @@ import (
 	"github.com/mandloideep/miniclaw/internal/services/triage"
 )
 
+// Classifier produces a category label for a stored email. Wired to
+// internal/services/categories.Classify in main; nil-safe inside Sync.
+type Classifier func(fromAddress, listUnsubscribeHeader string) string
+
 // IMAPSyncer ingests one account at a time.
 type IMAPSyncer struct {
 	q        *sqlcgen.Queries
 	accounts *account.Service
 	triage   *triage.Service
+	classify Classifier
 	// dialTLS is overridable for tests.
 	dialTLS func(addr string, opts *imapclient.Options) (*imapclient.Client, error)
 }
 
 // NewIMAPSyncer wires the syncer to the shared DB pool and account service.
-// triage may be nil — sync skips filter-rule checks and screener tracking
+// triage and classify may both be nil — sync skips the corresponding step
 // when absent (useful for tests that don't need the full pipeline).
-func NewIMAPSyncer(pool *sql.DB, acc *account.Service, tri *triage.Service) *IMAPSyncer {
+func NewIMAPSyncer(pool *sql.DB, acc *account.Service, tri *triage.Service, classify Classifier) *IMAPSyncer {
 	return &IMAPSyncer{
 		q:        sqlcgen.New(pool),
 		accounts: acc,
 		triage:   tri,
+		classify: classify,
 		dialTLS:  imapclient.DialTLS,
 	}
 }
@@ -161,7 +167,7 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 			_ = s.triage.RegisterSender(ctx, accountID, from.address)
 		}
 
-		_, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
+		id, err := s.q.UpsertEmail(ctx, sqlcgen.UpsertEmailParams{
 			AccountID:   accountID,
 			MessageID:   msg.Envelope.MessageID,
 			Folder:      "INBOX",
@@ -178,6 +184,11 @@ func (s *IMAPSyncer) Sync(ctx context.Context, accountID int64) (int, error) {
 		})
 		if err != nil {
 			return written, fmt.Errorf("upsert message %s: %w", msg.Envelope.MessageID, err)
+		}
+		if s.classify != nil {
+			if cat := s.classify(from.address, headers["List-Unsubscribe"]); cat != "" {
+				_ = s.q.SetCategory(ctx, sqlcgen.SetCategoryParams{Category: cat, ID: id})
+			}
 		}
 		written++
 	}
