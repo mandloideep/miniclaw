@@ -225,7 +225,7 @@ export default function App() {
                 title="Planner"
                 subtitle="Calendar blocks, todos, notes — workspace-local."
               >
-                <PlannerView workspace={activeWorkspace} />
+                <PlannerView workspace={activeWorkspace} accounts={activeAccounts} />
               </PaneShell>
             )}
           </main>

@@ -10,7 +10,7 @@ import { Textarea } from "../components/ui/textarea";
 // PlannerView is the unified "non-email" surface: time blocks, todos, and
 // notes share a single nav slot since each is workspace-scoped and the
 // three feel like one tab in practice ("the rest of my day").
-export default function PlannerView({ workspace }) {
+export default function PlannerView({ workspace, accounts = [] }) {
   if (!workspace) {
     return <p className="text-[13px] text-ink-subtle">Pick a workspace.</p>;
   }
@@ -31,7 +31,7 @@ export default function PlannerView({ workspace }) {
         </TabsTrigger>
       </TabsList>
       <TabsContent value="calendar">
-        <CalendarPane workspace={workspace} />
+        <CalendarPane workspace={workspace} accounts={accounts} />
       </TabsContent>
       <TabsContent value="todos">
         <TodosPane workspace={workspace} />
@@ -43,7 +43,7 @@ export default function PlannerView({ workspace }) {
   );
 }
 
-function CalendarPane({ workspace }) {
+function CalendarPane({ workspace, accounts }) {
   const [blocks, setBlocks] = useState([]);
   const [draft, setDraft] = useState({
     title: "",
@@ -51,6 +51,16 @@ function CalendarPane({ workspace }) {
     endAt: "",
     kind: "block",
   });
+  const [googleAccountId, setGoogleAccountId] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+
+  const googleAccounts = (accounts || []).filter((a) => a.authKind === "gmail_oauth");
+  useEffect(() => {
+    if (googleAccounts.length && !googleAccountId) {
+      setGoogleAccountId(googleAccounts[0].id);
+    }
+  }, [googleAccounts, googleAccountId]);
 
   const refresh = useCallback(async () => {
     setBlocks(await Calendar.List(workspace.id));
@@ -59,6 +69,22 @@ function CalendarPane({ workspace }) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const pullFromGoogle = async () => {
+    if (!googleAccountId) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const n = await Calendar.PullFromGoogle(workspace.id, googleAccountId);
+      setSyncMsg({ ok: true, text: `Imported ${n} event${n === 1 ? "" : "s"}.` });
+      await refresh();
+    } catch (err) {
+      setSyncMsg({ ok: false, text: friendlyCalErr(err) });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(null), 6000);
+    }
+  };
 
   async function submit(e) {
     e.preventDefault();
@@ -77,6 +103,29 @@ function CalendarPane({ workspace }) {
 
   return (
     <div className="space-y-4">
+      {googleAccounts.length > 0 && (
+        <div className="flex items-center gap-2 text-[12px] text-ink-subtle">
+          <span>Google Calendar:</span>
+          <select
+            value={googleAccountId}
+            onChange={(e) => setGoogleAccountId(Number(e.target.value))}
+            className="px-2 py-1 bg-surface-2 border border-hairline-strong rounded text-[12px]"
+            aria-label="Google account for calendar sync"
+          >
+            {googleAccounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.emailAddress}
+              </option>
+            ))}
+          </select>
+          <Button size="xs" variant="secondary" onClick={pullFromGoogle} disabled={syncing}>
+            {syncing ? "Pulling…" : "Pull from Google"}
+          </Button>
+          {syncMsg && (
+            <span className={syncMsg.ok ? "text-ink-muted" : "text-danger"}>{syncMsg.text}</span>
+          )}
+        </div>
+      )}
       <form
         onSubmit={submit}
         className="border border-hairline rounded-md p-3 bg-surface-1 grid grid-cols-1 md:grid-cols-5 gap-2 items-end"
@@ -130,17 +179,33 @@ function CalendarPane({ workspace }) {
               <Badge variant="outline" className="text-[10px]">
                 {b.kind}
               </Badge>
-              {b.googleEventId ? (
-                <Badge variant="muted" className="text-[10px]">
+              {b.googleEventId && !b.googleEventId.startsWith("pending:") ? (
+                <Badge
+                  variant="muted"
+                  className="text-[10px]"
+                  title={`Google ID: ${b.googleEventId}`}
+                >
                   synced
                 </Badge>
               ) : (
                 <Button
                   size="xs"
                   variant="ghost"
+                  disabled={!googleAccountId}
+                  title={
+                    googleAccountId
+                      ? "Push this block to Google Calendar"
+                      : "Connect a Gmail-OAuth account first"
+                  }
                   onClick={async () => {
-                    await Calendar.Promote(b.id);
-                    refresh();
+                    if (!googleAccountId) return;
+                    try {
+                      await Calendar.Promote(b.id, googleAccountId);
+                      refresh();
+                    } catch (err) {
+                      setSyncMsg({ ok: false, text: friendlyCalErr(err) });
+                      setTimeout(() => setSyncMsg(null), 6000);
+                    }
                   }}
                 >
                   Promote
@@ -524,6 +589,20 @@ function inlineMd(s) {
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+}
+
+// friendlyCalErr maps the most common Google Calendar API failures to a
+// short human sentence. Anything else falls through verbatim so we don't
+// hide details the developer might need.
+function friendlyCalErr(err) {
+  const raw = String(err?.message ?? err ?? "");
+  if (raw.includes("insufficient") || raw.includes("403")) {
+    return "Account is missing the calendar.events scope. Re-add it from Settings to grant access.";
+  }
+  if (raw.includes("401") || raw.toLowerCase().includes("invalid_grant")) {
+    return "Token expired. Re-authorise the account from Settings.";
+  }
+  return raw || "Sync failed.";
 }
 
 // findConflicts returns the other blocks whose time ranges overlap with
