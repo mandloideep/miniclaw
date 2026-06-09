@@ -152,9 +152,21 @@ function CalendarPane({ workspace }) {
   );
 }
 
+const TODO_FILTERS = [
+  { key: "open", label: "Open" },
+  { key: "overdue", label: "Overdue" },
+  { key: "today", label: "Today" },
+  { key: "upcoming", label: "Upcoming" },
+  { key: "no-date", label: "No date" },
+  { key: "done", label: "Done" },
+  { key: "all", label: "All" },
+];
+
 function TodosPane({ workspace }) {
   const [items, setItems] = useState([]);
   const [draft, setDraft] = useState("");
+  const [draftDue, setDraftDue] = useState("");
+  const [filter, setFilter] = useState("open");
 
   const refresh = useCallback(async () => {
     setItems(await Todos.List(workspace.id));
@@ -164,29 +176,54 @@ function TodosPane({ workspace }) {
     refresh();
   }, [refresh]);
 
+  const sortedFiltered = filterAndSort(items, filter);
+
   return (
     <div className="space-y-3">
       <form
         onSubmit={async (e) => {
           e.preventDefault();
           if (!draft.trim()) return;
-          await Todos.Create(workspace.id, draft.trim(), "");
+          const due = draftDue ? new Date(draftDue).toISOString() : "";
+          await Todos.Create(workspace.id, draft.trim(), due);
           setDraft("");
+          setDraftDue("");
           refresh();
         }}
         className="flex gap-2"
       >
         <Input placeholder="Add a todo" value={draft} onChange={(e) => setDraft(e.target.value)} />
+        <Input
+          type="datetime-local"
+          value={draftDue}
+          onChange={(e) => setDraftDue(e.target.value)}
+          className="w-52"
+          aria-label="Due date"
+        />
         <Button type="submit">
           <Plus className="w-3.5 h-3.5" />
           Add
         </Button>
       </form>
+      <div className="flex flex-wrap gap-1.5">
+        {TODO_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            onClick={() => setFilter(f.key)}
+            className={`px-2.5 py-1 rounded text-[11px] ${
+              filter === f.key ? "bg-ink text-canvas" : "bg-surface-2 text-ink-muted"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
       <ul className="space-y-1">
-        {items.length === 0 && (
-          <li className="text-[12px] text-ink-tertiary">Nothing on the list.</li>
+        {sortedFiltered.length === 0 && (
+          <li className="text-[12px] text-ink-tertiary">Nothing in this view.</li>
         )}
-        {items.map((t) => (
+        {sortedFiltered.map((t) => (
           <li
             key={t.id}
             className={
@@ -209,6 +246,9 @@ function TodosPane({ workspace }) {
             >
               {t.text}
             </span>
+            {t.dueAt && (
+              <span className={`text-[11px] ${dueClassName(t)}`}>{formatDue(t.dueAt)}</span>
+            )}
             <Button
               size="xs"
               variant="ghost"
@@ -225,6 +265,55 @@ function TodosPane({ workspace }) {
       </ul>
     </div>
   );
+}
+
+// Categorise a todo against today's bounds so the filter buttons can apply a
+// consistent rule without dragging Date math into every render.
+function dueBucket(todo, now) {
+  if (todo.done) return "done";
+  if (!todo.dueAt) return "no-date";
+  const due = new Date(todo.dueAt);
+  if (Number.isNaN(due.getTime())) return "no-date";
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  if (due < now) return "overdue";
+  if (due <= endOfToday) return "today";
+  return "upcoming";
+}
+
+function filterAndSort(items, filter) {
+  const now = new Date();
+  const filtered = items.filter((t) => {
+    const bucket = dueBucket(t, now);
+    if (filter === "all") return true;
+    if (filter === "open") return !t.done;
+    return bucket === filter;
+  });
+  // Sort by dueAt ascending, undated last, then by id for stability.
+  return filtered.slice().sort((a, b) => {
+    const av = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
+    const bv = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
+    if (av !== bv) return av - bv;
+    return a.id - b.id;
+  });
+}
+
+function dueClassName(todo) {
+  const bucket = dueBucket(todo, new Date());
+  if (bucket === "overdue") return "text-danger";
+  if (bucket === "today") return "text-ink-muted";
+  return "text-ink-tertiary";
+}
+
+function formatDue(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function NotesPane({ workspace }) {
