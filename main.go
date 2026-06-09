@@ -4,13 +4,19 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
+	"os"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/mandloideep/miniclaw/internal/db"
+	"github.com/mandloideep/miniclaw/internal/services/account"
 	"github.com/mandloideep/miniclaw/internal/services/greet"
+	"github.com/mandloideep/miniclaw/internal/services/keychain"
+	"github.com/mandloideep/miniclaw/internal/services/workspace"
 )
 
 //go:embed all:frontend/dist
@@ -23,11 +29,29 @@ func init() {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("miniclaw: %v", err)
+		os.Exit(1)
+	}
+}
+
+// run is main's body in error-returning form so deferred closes run on exit.
+func run() error {
+	ctx := context.Background()
+	pool, err := db.Open(ctx, db.Config{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pool.Close() }()
+
 	app := application.New(application.Options{
 		Name:        "miniclaw",
 		Description: "Local-AI email triage with Telegram digests",
 		Services: []application.Service{
 			application.NewService(greet.New()),
+			application.NewService(keychain.New()),
+			application.NewService(workspace.New(pool)),
+			application.NewService(account.New(pool)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -49,10 +73,7 @@ func main() {
 	})
 
 	go emitClockTick(app)
-
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
-	}
+	return app.Run()
 }
 
 // emitClockTick is the scaffold's heartbeat — the frontend listens for "time"
