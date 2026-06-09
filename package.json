@@ -1,0 +1,20 @@
+{
+  "name": "miniclaw",
+  "private": true,
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.7"
+  },
+  "lint-staged": {
+    "frontend/**/*.{js,jsx,ts,tsx,json,css}": [
+      "frontend/node_modules/.bin/biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
+    ],
+    "**/*.go": [
+      "gofmt -w",
+      "goimports -w"
+    ]
+  }
+}
