@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/mandloideep/miniclaw/internal/db/sqlcgen"
 )
@@ -153,6 +154,52 @@ func (s *Service) ListOlderByWorkspace(ctx context.Context, workspaceID int64, b
 			&isRead, &isPutAside, &e.Category,
 		); err != nil {
 			return nil, fmt.Errorf("scan older email: %w", err)
+		}
+		e.IsRead = isRead == 1
+		e.IsPutAside = isPutAside == 1
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Search runs the FTS5 query against the emails_fts virtual table for
+// emails in a workspace. q is a raw FTS5 match expression — the
+// frontend should treat user input as a single phrase ("…") unless the
+// user explicitly uses operators.
+func (s *Service) Search(ctx context.Context, workspaceID int64, q string, limit int64) ([]Email, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return s.ListByWorkspace(ctx, workspaceID, limit)
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	// Wrap in quotes so user input is matched as a phrase, escape "" inside.
+	phrase := `"` + strings.ReplaceAll(q, `"`, `""`) + `"`
+	const sqlQ = `
+SELECT e.id, e.account_id, e.from_address, e.from_name, e.subject,
+       e.received_at, e.body_plain, e.is_read, e.is_put_aside, e.category
+FROM emails_fts f
+JOIN emails e ON e.id = f.rowid
+JOIN accounts a ON a.id = e.account_id
+WHERE a.workspace_id = ? AND emails_fts MATCH ?
+ORDER BY e.received_at DESC
+LIMIT ?`
+	rows, err := s.pool.QueryContext(ctx, sqlQ, workspaceID, phrase, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fts search: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]Email, 0, int(limit))
+	for rows.Next() {
+		var e Email
+		var isRead, isPutAside int64
+		if err := rows.Scan(
+			&e.ID, &e.AccountID, &e.FromAddress, &e.FromName,
+			&e.Subject, &e.ReceivedAt, &e.BodyPlain,
+			&isRead, &isPutAside, &e.Category,
+		); err != nil {
+			return nil, fmt.Errorf("scan search row: %w", err)
 		}
 		e.IsRead = isRead == 1
 		e.IsPutAside = isPutAside == 1

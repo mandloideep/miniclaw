@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Accounts, GmailOAuth, IMAPSync, Keychain, MSOAuth, Ollama, Workspaces } from "./api";
+import CommandPalette from "./components/CommandPalette";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Separator } from "./components/ui/separator";
@@ -44,6 +45,8 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [pendingEmailId, setPendingEmailId] = useState(null);
 
   const refreshWorkspaces = useCallback(async () => {
     const ws = await Workspaces.List();
@@ -63,6 +66,17 @@ export default function App() {
     const t = setInterval(() => Ollama.Status().then(setOllamaStatus), 30000);
     return () => clearInterval(t);
   }, [refreshWorkspaces, refreshAccounts]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     // Live ingest status. Scheduler emits start → done/error per account.
@@ -122,6 +136,22 @@ export default function App() {
         onSync={syncAll}
         onSettings={() => setShowSettings(true)}
       />
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        workspace={activeWorkspace}
+        onNavigate={(id) => {
+          setShowSettings(false);
+          setNav(id);
+        }}
+        onSync={syncAll}
+        onSettings={() => setShowSettings(true)}
+        onOpenEmail={(em) => {
+          setShowSettings(false);
+          setNav("inbox");
+          setPendingEmailId(em.id);
+        }}
+      />
 
       {showSettings ? (
         <main className="flex-1 overflow-auto px-8 py-6">
@@ -148,9 +178,17 @@ export default function App() {
             onNav={setNav}
             accounts={activeAccounts}
             workspace={activeWorkspace}
+            onSearch={() => setPaletteOpen(true)}
           />
           <main className="flex-1 min-w-0 flex flex-col bg-canvas">
-            {nav === "inbox" && <InboxView workspace={activeWorkspace} accounts={activeAccounts} />}
+            {nav === "inbox" && (
+              <InboxView
+                workspace={activeWorkspace}
+                accounts={activeAccounts}
+                openEmailId={pendingEmailId}
+                onEmailOpened={() => setPendingEmailId(null)}
+              />
+            )}
             {nav === "put-aside" && (
               <PaneShell title="Put aside" subtitle="Saved for later, out of the main flow.">
                 <PutAsideView workspace={activeWorkspace} />
@@ -289,12 +327,13 @@ function StatusPill({ ok, label }) {
   );
 }
 
-function SideRail({ nav, onNav, accounts, workspace }) {
+function SideRail({ nav, onNav, accounts, workspace, onSearch }) {
   return (
     <aside className="w-60 shrink-0 border-r border-hairline bg-canvas flex flex-col">
       <div className="px-3 pt-4 pb-2">
         <button
           type="button"
+          onClick={onSearch}
           className="w-full inline-flex items-center gap-2 h-8 px-2 rounded-md text-[12px] text-ink-subtle bg-surface-1 border border-hairline hover:bg-surface-2"
         >
           <Search className="w-3.5 h-3.5" />

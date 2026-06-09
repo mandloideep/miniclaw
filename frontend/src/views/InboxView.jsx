@@ -21,7 +21,7 @@ import { Textarea } from "../components/ui/textarea";
 
 const PAGE = 80;
 
-export default function InboxView({ workspace, accounts }) {
+export default function InboxView({ workspace, accounts, openEmailId, onEmailOpened }) {
   const [emails, setEmails] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -61,6 +61,13 @@ export default function InboxView({ workspace, accounts }) {
       .then(setDetail)
       .catch(() => setDetail(null));
   }, [selectedId]);
+
+  useEffect(() => {
+    if (openEmailId != null) {
+      setSelectedId(openEmailId);
+      onEmailOpened?.();
+    }
+  }, [openEmailId, onEmailOpened]);
 
   const loadOlder = useCallback(async () => {
     if (!workspace || !oldestReceivedAt || loadingOlder) return;
